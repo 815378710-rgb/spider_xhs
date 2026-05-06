@@ -33,4 +33,4 @@ CLAUDE.md
 AGENTS.md
 .agent
 docs
-docx
+docx*.env

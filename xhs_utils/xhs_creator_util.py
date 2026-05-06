@@ -6,11 +6,12 @@ import execjs
 from xhs_utils.xhs_util import generate_x_b3_traceid, generate_xray_traceid, splice_str
 
 _STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 
 def _compile_static_js(filename):
     with open(os.path.join(_STATIC_DIR, filename), 'r', encoding='utf-8') as f:
-        return execjs.compile(f.read())
+        return execjs.compile(f.read(), cwd=_PROJECT_ROOT)
 
 
 _JS_CACHE = {}

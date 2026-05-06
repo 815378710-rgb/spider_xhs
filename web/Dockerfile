@@ -14,17 +14,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # 先复制依赖文件，利用 Docker 缓存
-COPY requirements.txt package.json package-lock.json ./
-RUN pip install --no-cache-dir -r requirements.txt && npm install
+COPY web/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && npm install -g crypto-js jsdom
 
-# 复制整个项目
+# 复制整个项目（签名JS和API层都依赖）
 COPY . .
 
-# 设置 Node.js 模块路径（execjs 需要）
-ENV NODE_PATH=/app/node_modules
-ENV PYTHONUNBUFFERED=1
-ENV NODE_ENV=production
+WORKDIR /app/web
 
 EXPOSE 5000
 
-CMD ["python", "web/app.py"]
+ENV PYTHONUNBUFFERED=1
+ENV NODE_ENV=production
+
+CMD ["python", "app.py"]

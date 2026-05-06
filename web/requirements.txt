@@ -1,19 +1,16 @@
-# 土豆小红书助手 - 完整依赖
-
-# Web 框架
+# 土豆小红书助手 - Web 依赖
 flask>=3.0
 flask-socketio>=5.3
 python-socketio>=5.10
 eventlet>=0.35
 
-# 核心依赖
+# 继承原项目依赖
 PyExecJS
 requests
 loguru
 python-dotenv
 retry
 openpyxl
-aiohttp
 opencv-python
 numpy
 qrcode

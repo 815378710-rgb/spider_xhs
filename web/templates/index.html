@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🥔 土豆小红书助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="/static/js/qrcode.min.js?v=20260506b"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        xhs: '#ff2442',
+                        xhs_light: '#ff6b81',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * { font-family: 'Inter', system-ui, sans-serif; }
+        .glass { background: rgba(255,255,255,0.8); backdrop-filter: blur(20px); }
+        .card { background: #fff; border: 1px solid #f0f0f0; border-radius: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .btn-primary { background: linear-gradient(135deg, #ff2442, #ff6b81); color: #fff; border: none; border-radius: 12px; padding: 12px 24px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(255,36,66,0.4); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+        .btn-secondary { background: #f5f5f7; color: #333; border: 1px solid #e5e5e7; border-radius: 12px; padding: 12px 24px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+        .btn-secondary:hover { background: #ebebed; }
+        input, select, textarea { border: 1px solid #e5e5e7; border-radius: 12px; padding: 12px 16px; font-size: 14px; transition: all 0.2s; outline: none; width: 100%; background: #fafafa; }
+        input:focus, select:focus, textarea:focus { border-color: #ff2442; box-shadow: 0 0 0 3px rgba(255,36,66,0.1); background: #fff; }
+        .progress-bar { height: 6px; background: #f0f0f0; border-radius: 3px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #ff2442, #ff6b81); border-radius: 3px; transition: width 0.5s ease; }
+        .log-item { padding: 6px 0; font-size: 13px; color: #666; border-bottom: 1px solid #f5f5f7; }
+        .log-item:last-child { border-bottom: none; }
+        .badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+        .badge-green { background: #ecfdf5; color: #059669; }
+        .badge-red { background: #fef2f2; color: #dc2626; }
+        .badge-yellow { background: #fffbeb; color: #d97706; }
+        .stat-number { font-size: 32px; font-weight: 700; background: linear-gradient(135deg, #ff2442, #ff6b81); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .fade-in { animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .tab-active { background: linear-gradient(135deg, #ff2442, #ff6b81); color: #fff !important; }
+        .img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+        .img-card { position: relative; border-radius: 12px; overflow: hidden; aspect-ratio: 1; cursor: pointer; }
+        .img-card img { width: 100%; height: 100%; object-fit: cover; }
+        .diff-card { border-left: 4px solid; padding-left: 16px; margin-bottom: 16px; }
+        .diff-original { border-color: #d1d5db; }
+        .diff-rewritten { border-color: #ff2442; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #ddd; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #bbb; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- 顶部导航 -->
+<nav class="glass sticky top-0 z-50 border-b border-gray-100">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-gradient-to-br from-xhs to-xhs_light rounded-xl flex items-center justify-center text-white text-xl">🥔</div>
+            <div>
+                <h1 class="text-lg font-bold text-gray-900">土豆小红书助手</h1>
+                <p class="text-xs text-gray-400">采集 · 改写 · 图片处理</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-3">
+            <div id="cookieStatus" class="badge badge-yellow">
+                <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                检测中...
+            </div>
+            <div id="llmStatus" class="badge badge-yellow">
+                <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                AI 模型
+            </div>
+            <button onclick="openSettings()" class="btn-secondary flex items-center gap-2">
+                ⚙️ 设置
+            </button>
+        </div>
+    </div>
+</nav>
+
+<!-- 主体 -->
+<div class="max-w-7xl mx-auto px-6 py-8">
+
+    <!-- 标签导航 -->
+    <div class="flex gap-2 mb-8">
+        <button onclick="switchTab('rewrite')" id="tab-rewrite" class="tab-btn tab-active px-5 py-2.5 rounded-xl font-medium text-sm transition-all">📝 笔记改写</button>
+        <button onclick="switchTab('batch')" id="tab-batch" class="tab-btn px-5 py-2.5 rounded-xl font-medium text-sm text-gray-500 hover:text-gray-700 transition-all">🔍 批量采集</button>
+        <button onclick="switchTab('history')" id="tab-history" class="tab-btn px-5 py-2.5 rounded-xl font-medium text-sm text-gray-500 hover:text-gray-700 transition-all">📊 历史记录</button>
+    </div>
+
+    <!-- 笔记改写页 -->
+    <div id="page-rewrite" class="tab-page fade-in">
+        <!-- 统计卡片 -->
+        <div class="grid grid-cols-4 gap-4 mb-8">
+            <div class="card p-5">
+                <p class="text-sm text-gray-400 mb-1">今日采集</p>
+                <p id="stat-today-collect" class="stat-number">0</p>
+            </div>
+            <div class="card p-5">
+                <p class="text-sm text-gray-400 mb-1">今日改写</p>
+                <p id="stat-today-rewrite" class="stat-number">0</p>
+            </div>
+            <div class="card p-5">
+                <p class="text-sm text-gray-400 mb-1">累计采集</p>
+                <p id="stat-total-collect" class="stat-number">0</p>
+            </div>
+            <div class="card p-5">
+                <p class="text-sm text-gray-400 mb-1">累计改写</p>
+                <p id="stat-total-rewrite" class="stat-number">0</p>
+            </div>
+        </div>
+
+        <!-- 输入区 -->
+        <div class="card p-6 mb-6">
+            <h2 class="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">📝 笔记改写工作流</h2>
+            
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-500 mb-2">笔记链接</label>
+                <input type="text" id="noteUrl" placeholder="粘贴小红书笔记链接，例如 https://www.xiaohongshu.com/explore/xxx" class="w-full">
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 mb-5">
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">改写风格</label>
+                    <select id="rewriteStyle">
+                        <option>保持原风格</option>
+                        <option selected>种草带货风</option>
+                        <option>干货教程风</option>
+                        <option>情绪共鸣风</option>
+                        <option>测评对比风</option>
+                        <option>清单合集风</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">AI 模型</label>
+                    <select id="rewriteModel">
+                        <option value="">自动 (跟随设置)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex gap-3">
+                <button onclick="startFullProcess()" id="btnStart" class="btn-primary flex items-center gap-2 flex-1 justify-center">
+                    🚀 开始处理
+                </button>
+                <button onclick="resetForm()" class="btn-secondary">重置</button>
+            </div>
+        </div>
+
+        <!-- 进度条 -->
+        <div id="progressArea" class="card p-6 mb-6 hidden">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-semibold text-gray-700" id="progressTitle">处理进度</h3>
+                <span class="text-sm text-gray-400" id="progressPercent">0%</span>
+            </div>
+            <div class="progress-bar mb-4">
+                <div id="progressBar" class="progress-fill" style="width: 0%"></div>
+            </div>
+            <div class="flex justify-between text-xs text-gray-400" id="progressSteps">
+                <span>采集笔记</span>
+                <span>AI 改写</span>
+                <span>图片处理</span>
+                <span>完成</span>
+            </div>
+        </div>
+
+        <!-- 结果对比区 -->
+        <div id="resultArea" class="hidden">
+            <div class="grid grid-cols-2 gap-6 mb-6">
+                <!-- 原文 -->
+                <div class="card p-6 diff-card diff-original fade-in">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-semibold text-gray-500">📄 原文</h3>
+                        <span class="badge badge-green">原始内容</span>
+                    </div>
+                    <h4 id="originalTitle" class="font-bold text-gray-900 mb-3 text-lg"></h4>
+                    <p id="originalDesc" class="text-sm text-gray-500 leading-relaxed whitespace-pre-wrap"></p>
+                    <div id="originalStats" class="flex gap-3 mt-4"></div>
+                </div>
+
+                <!-- 改写后 -->
+                <div class="card p-6 diff-card diff-rewritten border border-xhs/20 fade-in">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-semibold text-xhs">✨ 改写后</h3>
+                        <span class="badge" style="background:rgba(255,36,66,0.1);color:#ff2442" id="rewriteProvider"></span>
+                    </div>
+                    <h4 id="rewrittenTitle" class="font-bold text-gray-900 mb-3 text-lg"></h4>
+                    <p id="rewrittenDesc" class="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap"></p>
+                    <div class="flex gap-2 mt-5">
+                        <button onclick="copyText('rewrittenTitle')" class="btn-secondary text-sm flex-1">📋 复制标题</button>
+                        <button onclick="copyText('rewrittenDesc')" class="btn-secondary text-sm flex-1">📋 复制正文</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 图片区 -->
+            <div class="card p-6 mb-6 fade-in">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-semibold text-gray-700">🖼️ 图片防重处理</h3>
+                    <div class="flex items-center gap-2">
+                        <span class="text-sm text-gray-400">处理强度:</span>
+                        <select id="imageLevel" class="text-sm py-1 px-3" style="width:auto">
+                            <option value="light">轻度</option>
+                            <option value="medium" selected>中度</option>
+                            <option value="heavy">重度</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="imageGrid" class="img-grid"></div>
+                <div class="flex gap-3 mt-5">
+                    <button onclick="processAllImages()" id="btnProcessImages" class="btn-primary flex-1">🖼️ 一键处理全部图片</button>
+                    <button onclick="downloadAllImages()" class="btn-secondary flex-1">📥 下载处理后图片</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量采集页 -->
+    <div id="page-batch" class="tab-page hidden fade-in">
+        <div class="card p-6 mb-6">
+            <h2 class="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">🔍 批量搜索采集</h2>
+            
+            <div class="grid grid-cols-4 gap-4 mb-5">
+                <div class="col-span-2">
+                    <label class="block text-sm font-medium text-gray-500 mb-2">搜索关键词</label>
+                    <input type="text" id="searchKeyword" placeholder="输入关键词，如 防晒霜">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">数量</label>
+                    <input type="number" id="searchCount" value="10" min="1" max="100">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">排序</label>
+                    <select id="searchSort">
+                        <option value="0">综合排序</option>
+                        <option value="1">最新</option>
+                        <option value="2">最多点赞</option>
+                        <option value="3">最多评论</option>
+                        <option value="4">最多收藏</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex gap-3">
+                <button onclick="batchSearch()" id="btnSearch" class="btn-primary flex items-center gap-2 flex-1 justify-center">
+                    🔍 搜索笔记
+                </button>
+            </div>
+        </div>
+
+        <!-- 搜索结果 -->
+        <div id="searchResults" class="hidden">
+            <div class="card p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-semibold text-gray-700">搜索结果</h3>
+                    <button onclick="batchRewriteSelected()" class="btn-primary text-sm">✨ 批量改写选中</button>
+                </div>
+                <div id="searchResultsList" class="space-y-3"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 历史记录页 -->
+    <div id="page-history" class="tab-page hidden fade-in">
+        <div class="card p-6">
+            <h2 class="text-lg font-bold text-gray-900 mb-5">📊 改写历史</h2>
+            <p class="text-gray-400 text-sm">历史记录功能开发中...</p>
+        </div>
+    </div>
+</div>
+
+<!-- 设置弹窗 -->
+<div id="settingsModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" onclick="closeSettings()"></div>
+    <div class="absolute right-0 top-0 h-full w-[480px] bg-white shadow-2xl p-8 overflow-y-auto">
+        <div class="flex justify-between items-center mb-8">
+            <h2 class="text-xl font-bold text-gray-900">⚙️ 设置</h2>
+            <button onclick="closeSettings()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+        </div>
+
+        <div class="space-y-6">
+            <!-- Cookie -->
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">🍪 小红书 Cookie</label>
+                
+                <!-- 扫码登录区 -->
+                <div id="qrLoginArea" class="mb-4">
+                    <button onclick="startQRLogin()" id="btnQRLogin" class="btn-primary w-full mb-3 flex items-center justify-center gap-2">
+                        📱 扫码登录自动获取 Cookie
+                    </button>
+                    <div id="qrContainer" class="hidden text-center">
+                        <div id="qrCodeDisplay" class="inline-block p-4 bg-white border-2 border-gray-200 rounded-2xl mb-3"></div>
+                        <p id="qrStatus" class="text-sm text-gray-500">请使用小红书 APP 扫描二维码</p>
+                        <p id="qrHint" class="text-xs text-gray-400 mt-1">扫码后请在手机上确认登录</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3 my-3">
+                    <div class="flex-1 h-px bg-gray-200"></div>
+                    <span class="text-xs text-gray-400">或手动粘贴</span>
+                    <div class="flex-1 h-px bg-gray-200"></div>
+                </div>
+
+                <textarea id="settingCookies" rows="3" placeholder="从浏览器 F12 → Network → 复制 Cookie..." class="w-full text-xs"></textarea>
+                <div class="flex gap-2 mt-2">
+                    <button onclick="testCookie()" class="btn-secondary text-sm flex-1">🔍 测试有效性</button>
+                    <button onclick="saveSettings()" class="btn-secondary text-sm flex-1">💾 保存</button>
+                </div>
+                <div id="cookieTestResult" class="mt-2 text-sm hidden"></div>
+            </div>
+
+            <!-- Cookie 池 -->
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-semibold text-gray-700">🍪 Cookie 池管理</label>
+                    <button onclick="refreshCookiePool()" id="btnRefreshPool" class="text-xs text-xhs hover:text-xhs_light">🔄 刷新</button>
+                </div>
+                <div id="cookiePoolInfo" class="text-xs text-gray-400 mb-2">加载中...</div>
+                <div id="cookiePoolList" class="space-y-1 mb-3 max-h-40 overflow-y-auto"></div>
+                <div class="flex gap-2">
+                    <button onclick="cookiePoolValidate()" class="btn-secondary text-xs flex-1">🔍 验证全部</button>
+                    <button onclick="cookiePoolAutoUpdate()" class="btn-secondary text-xs flex-1">🧹 清理失效</button>
+                    <button onclick="cookiePoolUseBest()" class="btn-secondary text-xs flex-1">⚡ 用最佳</button>
+                </div>
+            </div>
+
+            <!-- AI 模型 -->
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">🤖 AI 模型配置</label>
+                <div class="space-y-3">
+                    <select id="settingProvider" onchange="onProviderChange()">
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="mimo">MiMo (小米)</option>
+                        <option value="openai_compat">自定义 (OpenAI 兼容)</option>
+                    </select>
+                    <input type="text" id="settingApiKey" placeholder="API Key">
+                    <div>
+                        <div class="flex gap-2">
+                            <input type="text" id="settingModel" placeholder="模型名 (可选，留空用默认)" class="flex-1">
+                            <button onclick="fetchModels()" id="btnFetchModels" class="btn-secondary text-sm whitespace-nowrap" title="自动获取模型列表">🔄 刷新模型</button>
+                        </div>
+                        <div id="modelListHint" class="text-xs text-gray-400 mt-1 hidden"></div>
+                    </div>
+                    <input type="text" id="settingBaseUrl" placeholder="Base URL (可选，留空用默认)">
+                    <div id="providerHint" class="text-xs text-gray-400 bg-gray-50 rounded-lg p-3 hidden"></div>
+                    <button onclick="testAIConfig()" class="btn-secondary text-sm w-full" id="btnTestAI">🔍 测试 AI 连接</button>
+                    <div id="aiTestResult" class="mt-1 text-sm hidden"></div>
+                </div>
+            </div>
+
+            <button onclick="saveSettings()" class="btn-primary w-full">💾 保存设置</button>
+        </div>
+    </div>
+</div>
+
+<!-- 实时日志浮窗 -->
+<div id="logPanel" class="fixed bottom-6 right-6 w-80 card p-4 hidden z-40">
+    <div class="flex justify-between items-center mb-3">
+        <h3 class="text-sm font-semibold text-gray-700">📋 实时日志</h3>
+        <button onclick="toggleLog()" class="text-gray-400 hover:text-gray-600">&times;</button>
+    </div>
+    <div id="logContent" class="max-h-60 overflow-y-auto space-y-1 text-xs"></div>
+</div>
+
+<script>
+const socket = io();
+let currentImages = { original: [], processed: [] };
+let searchResults = [];
+
+// ── 初始化 ──
+window.addEventListener('load', () => {
+    loadConfig();
+    loadStats();
+});
+
+function loadConfig() {
+    fetch('/api/config')
+        .then(r => r.json())
+        .then(data => {
+            updateStatus('cookieStatus', data.cookies_configured, 'Cookie', data.cookies_configured ? '已连接' : '未配置');
+            updateStatus('llmStatus', data.llm_configured, 'AI 模型', data.llm_configured ? data.llm_model : '未配置');
+        });
+}
+
+function loadStats() {
+    fetch('/api/stats')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('stat-today-collect').textContent = data.today_processed || 0;
+            document.getElementById('stat-today-rewrite').textContent = data.today_rewritten || 0;
+            document.getElementById('stat-total-collect').textContent = data.total_processed || 0;
+            document.getElementById('stat-total-rewrite').textContent = data.total_rewritten || 0;
+        });
+}
+
+function updateStatus(id, ok, label, detail) {
+    const el = document.getElementById(id);
+    if (ok) {
+        el.className = 'badge badge-green';
+        el.innerHTML = `<span class="w-2 h-2 bg-green-500 rounded-full"></span> ${detail}`;
+    } else {
+        el.className = 'badge badge-red';
+        el.innerHTML = `<span class="w-2 h-2 bg-red-500 rounded-full"></span> ${detail}`;
+    }
+}
+
+// ── 标签切换 ──
+function switchTab(name) {
+    document.querySelectorAll('.tab-page').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('tab-active'));
+    document.getElementById(`page-${name}`).classList.remove('hidden');
+    document.getElementById(`tab-${name}`).classList.add('tab-active');
+}
+
+// ── 设置 ──
+function openSettings() {
+    document.getElementById('settingsModal').classList.remove('hidden');
+    refreshCookiePool();
+}
+function closeSettings() { document.getElementById('settingsModal').classList.add('hidden'); }
+
+// ── AI 配置相关 ──
+const PROVIDER_HINTS = {
+    deepseek: 'Base URL: https://api.deepseek.com/v1\n模型: deepseek-v3 / deepseek-v4\n认证: Authorization: Bearer {key}',
+    mimo: 'Base URL: https://token-plan-cn.xiaomimimo.com/v1 (自动设置)\n模型: mimo-v2-pro / mimo-v2-flash\n认证: api-key: {key} (不是 Bearer)',
+    openai_compat: '填入兼容 OpenAI 的 Base URL 和 API Key',
+};
+
+function onProviderChange() {
+    const provider = document.getElementById('settingProvider').value;
+    const hint = document.getElementById('providerHint');
+    if (PROVIDER_HINTS[provider]) {
+        hint.textContent = PROVIDER_HINTS[provider];
+        hint.classList.remove('hidden');
+    } else {
+        hint.classList.add('hidden');
+    }
+    // MiMo 自动填 base_url
+    if (provider === 'mimo') {
+        document.getElementById('settingBaseUrl').value = 'https://token-plan-cn.xiaomimimo.com/v1';
+        document.getElementById('settingBaseUrl').placeholder = 'https://token-plan-cn.xiaomimimo.com/v1';
+        document.getElementById('settingModel').placeholder = '留空默认 mimo-v2-pro';
+    } else if (provider === 'deepseek') {
+        document.getElementById('settingBaseUrl').value = '';
+        document.getElementById('settingBaseUrl').placeholder = '留空默认 https://api.deepseek.com/v1';
+        document.getElementById('settingModel').placeholder = '留空默认 deepseek-v3';
+    } else {
+        document.getElementById('settingBaseUrl').value = '';
+        document.getElementById('settingBaseUrl').placeholder = 'Base URL (可选，留空用默认)';
+        document.getElementById('settingModel').placeholder = '模型名 (可选，留空用默认)';
+    }
+    // 如果已有 API Key，自动获取模型列表
+    const apiKey = document.getElementById('settingApiKey').value.trim();
+    if (apiKey) {
+        fetchModels();
+    }
+}
+
+function testAIConfig() {
+    const btn = document.getElementById('btnTestAI');
+    const resultEl = document.getElementById('aiTestResult');
+    btn.disabled = true;
+    btn.textContent = '⏳ 测试中...';
+    resultEl.classList.add('hidden');
+
+    // 把当前表单值发过去测试（不保存）
+    const payload = {
+        provider: document.getElementById('settingProvider').value,
+        api_key: document.getElementById('settingApiKey').value.trim(),
+        model: document.getElementById('settingModel').value.trim(),
+        base_url: document.getElementById('settingBaseUrl').value.trim(),
+    };
+
+    fetch('/api/test-ai', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+        resultEl.classList.remove('hidden');
+        if (data.success) {
+            resultEl.className = 'mt-1 text-sm text-green-600 font-medium';
+            resultEl.textContent = '✅ ' + data.message;
+        } else {
+            resultEl.className = 'mt-1 text-sm text-red-600 font-medium';
+            resultEl.textContent = '❌ ' + data.message;
+        }
+    })
+    .catch(() => {
+        resultEl.classList.remove('hidden');
+        resultEl.className = 'mt-1 text-sm text-red-600 font-medium';
+        resultEl.textContent = '❌ 网络错误';
+    })
+    .finally(() => { btn.disabled = false; btn.textContent = '🔍 测试 AI 连接'; });
+}
+
+// ── 自动获取模型列表 ──
+let allModels = [];
+
+function fetchModels() {
+    const btn = document.getElementById('btnFetchModels');
+    const hint = document.getElementById('modelListHint');
+    btn.disabled = true;
+    btn.textContent = '⏳ 获取中...';
+
+    const payload = {
+        provider: document.getElementById('settingProvider').value,
+        api_key: document.getElementById('settingApiKey').value.trim(),
+        base_url: document.getElementById('settingBaseUrl').value.trim(),
+    };
+
+    if (!payload.api_key) {
+        hint.classList.remove('hidden');
+        hint.textContent = '⚠️ 请先填写 API Key';
+        btn.disabled = false;
+        btn.textContent = '🔄 刷新模型';
+        return;
+    }
+
+    fetch('/api/models', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.models && data.models.length > 0) {
+            allModels = data.models;
+            populateRewriteModelDropdown(data.models);
+            hint.classList.remove('hidden');
+            hint.textContent = `✅ 获取到 ${data.models.length} 个模型` + (data.message ? ` (${data.message})` : '');
+            showToast(`已加载 ${data.models.length} 个模型`);
+        } else {
+            hint.classList.remove('hidden');
+            hint.textContent = '⚠️ 未获取到模型，' + (data.message || '请手动输入');
+        }
+    })
+    .catch(() => {
+        hint.classList.remove('hidden');
+        hint.textContent = '❌ 获取失败';
+    })
+    .finally(() => { btn.disabled = false; btn.textContent = '🔄 刷新模型'; });
+}
+
+function populateRewriteModelDropdown(models) {
+    const select = document.getElementById('rewriteModel');
+    const current = select.value;
+    select.innerHTML = '<option value="">自动 (跟随设置)</option>';
+    models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name || m.id;
+        select.appendChild(opt);
+    });
+    // 尝试保持之前选中的值
+    if (current && Array.from(select.options).some(o => o.value === current)) {
+        select.value = current;
+    }
+}
+
+function testCookie() {
+    const cookies = document.getElementById('settingCookies').value;
+    fetch('/api/test-cookie', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cookies})
+    })
+    .then(r => r.json())
+    .then(data => {
+        const el = document.getElementById('cookieTestResult');
+        el.classList.remove('hidden');
+        el.className = `mt-2 text-sm ${data.success ? 'text-green-600' : 'text-red-600'}`;
+        el.textContent = data.message;
+    });
+}
+
+function saveSettings() {
+    // 只发送非空字段，避免空值覆盖已有配置
+    const config = { llm_provider: document.getElementById('settingProvider').value };
+    const cookies = document.getElementById('settingCookies').value.trim();
+    const apiKey = document.getElementById('settingApiKey').value.trim();
+    const model = document.getElementById('settingModel').value.trim();
+    const baseUrl = document.getElementById('settingBaseUrl').value.trim();
+    if (cookies) config.cookies = cookies;
+    if (apiKey) config.llm_api_key = apiKey;
+    if (model) config.llm_model = model;
+    if (baseUrl) config.llm_base_url = baseUrl;
+    fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(config)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            closeSettings();
+            loadConfig();
+            showToast('✅ 设置已保存');
+        } else {
+            showToast('❌ 保存失败: ' + (data.message || '未知错误'), 'error');
+        }
+    })
+    .catch(e => showToast('❌ 保存失败: 网络错误', 'error'));
+}
+
+// ── 笔记改写流程 ──
+function startFullProcess() {
+    const url = document.getElementById('noteUrl').value.trim();
+    if (!url) { showToast('请输入笔记链接', 'error'); return; }
+
+    const btn = document.getElementById('btnStart');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 处理中...';
+
+    document.getElementById('progressArea').classList.remove('hidden');
+    document.getElementById('resultArea').classList.add('hidden');
+    updateProgress(0, '准备开始...');
+
+    document.getElementById('logPanel').classList.remove('hidden');
+    document.getElementById('logContent').innerHTML = '';
+    addLog('🚀 开始处理...');
+
+    socket.emit('start_task', {
+        type: 'full_process',
+        url: url,
+        style: document.getElementById('rewriteStyle').value,
+        model: document.getElementById('rewriteModel').value,
+        image_level: document.getElementById('imageLevel').value,
+    });
+}
+
+socket.on('task_progress', data => {
+    updateProgress(data.progress, data.message);
+    addLog(data.message);
+});
+
+socket.on('task_complete', data => {
+    updateProgress(100, '✅ 全部完成！');
+    addLog('✅ 处理完成！');
+
+    const result = data.data;
+
+    // 显示原文
+    document.getElementById('originalTitle').textContent = result.original.title;
+    document.getElementById('originalDesc').textContent = result.original.desc;
+
+    // 显示改写后
+    document.getElementById('rewrittenTitle').textContent = result.rewritten.title;
+    document.getElementById('rewrittenDesc').textContent = result.rewritten.desc;
+    document.getElementById('rewriteProvider').textContent = result.rewritten.provider || 'AI';
+
+    // 保存图片数据
+    currentImages.original = result.images_original || [];
+    currentImages.processed = result.images_processed || [];
+
+    // 显示图片
+    renderImages();
+
+    document.getElementById('resultArea').classList.remove('hidden');
+    loadStats();
+
+    const btn = document.getElementById('btnStart');
+    btn.disabled = false;
+    btn.innerHTML = '🚀 开始处理';
+});
+
+socket.on('task_error', data => {
+    addLog('❌ ' + data.message);
+    showToast(data.message, 'error');
+    updateProgress(0, '处理失败');
+
+    const btn = document.getElementById('btnStart');
+    btn.disabled = false;
+    btn.innerHTML = '🚀 开始处理';
+});
+
+function updateProgress(percent, text) {
+    document.getElementById('progressBar').style.width = percent + '%';
+    document.getElementById('progressPercent').textContent = percent + '%';
+    document.getElementById('progressTitle').textContent = text || '处理进度';
+}
+
+function renderImages() {
+    const grid = document.getElementById('imageGrid');
+    grid.innerHTML = '';
+    currentImages.original.forEach((url, i) => {
+        const processed = currentImages.processed[i];
+        const div = document.createElement('div');
+        div.className = 'img-card border border-gray-100';
+        div.innerHTML = `
+            <img src="${processed || url}" alt="图片 ${i+1}" loading="lazy">
+            <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs py-1 px-2 text-center">
+                ${processed ? '✅ 已处理' : '原图'} #${i+1}
+            </div>
+        `;
+        grid.appendChild(div);
+    });
+}
+
+function processAllImages() {
+    if (!currentImages.original.length) { showToast('没有图片需要处理', 'error'); return; }
+
+    const btn = document.getElementById('btnProcessImages');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 处理中...';
+
+    fetch('/api/images/process', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            urls: currentImages.original,
+            level: document.getElementById('imageLevel').value,
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            currentImages.processed = data.data.map(d => d.processed);
+            renderImages();
+            showToast(data.message);
+        } else {
+            showToast(data.message, 'error');
+        }
+    })
+    .finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '🖼️ 一键处理全部图片';
+    });
+}
+
+// ── 批量搜索 ──
+function batchSearch() {
+    const keyword = document.getElementById('searchKeyword').value.trim();
+    if (!keyword) { showToast('请输入关键词', 'error'); return; }
+
+    const btn = document.getElementById('btnSearch');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 搜索中...';
+
+    fetch('/api/batch/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            keyword,
+            count: parseInt(document.getElementById('searchCount').value),
+            sort_type: parseInt(document.getElementById('searchSort').value),
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            searchResults = data.data;
+            renderSearchResults();
+            document.getElementById('searchResults').classList.remove('hidden');
+            showToast(`找到 ${data.data.length} 篇笔记`);
+        } else {
+            showToast(data.message, 'error');
+        }
+    })
+    .finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '🔍 搜索笔记';
+    });
+}
+
+function renderSearchResults() {
+    const list = document.getElementById('searchResultsList');
+    list.innerHTML = '';
+    searchResults.forEach((note, i) => {
+        const div = document.createElement('div');
+        div.className = 'flex items-center gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors';
+        div.innerHTML = `
+            <input type="checkbox" class="note-check w-4 h-4 accent-xhs" data-index="${i}" checked>
+            <div class="flex-1 min-w-0">
+                <h4 class="font-medium text-gray-900 truncate">${note.title || '无标题'}</h4>
+                <p class="text-sm text-gray-400">by ${note.author || '未知'} · 👍 ${note.likes || 0}</p>
+            </div>
+            <button onclick="collectSingleNote('${note.id}', '${note.xsec_token}')" class="btn-secondary text-sm">采集改写</button>
+        `;
+        list.appendChild(div);
+    });
+}
+
+function batchRewriteSelected() {
+    const checked = document.querySelectorAll('.note-check:checked');
+    if (!checked.length) { showToast('请勾选要改写的笔记', 'error'); return; }
+    const indices = Array.from(checked).map(el => parseInt(el.dataset.index));
+    const urls = indices.map(i => {
+        const n = searchResults[i];
+        return `https://www.xiaohongshu.com/explore/${n.id}?xsec_token=${n.xsec_token}`;
+    });
+    // 用第一个开始，后续可扩展为队列
+    if (urls.length) {
+        document.getElementById('noteUrl').value = urls[0];
+        switchTab('rewrite');
+        startFullProcess();
+        showToast(`已选 ${urls.length} 篇，开始处理第 1 篇`);
+    }
+}
+
+function collectSingleNote(noteId, xsecToken) {
+    const url = `https://www.xiaohongshu.com/explore/${noteId}?xsec_token=${xsecToken}`;
+    document.getElementById('noteUrl').value = url;
+    switchTab('rewrite');
+    startFullProcess();
+}
+
+// ── 扫码登录 ──
+let qrLoginSessionId = null;
+let qrPollTimer = null;
+
+function startQRLogin() {
+    const btn = document.getElementById('btnQRLogin');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 获取二维码中...';
+
+    fetch('/api/login/qrcode', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                qrLoginSessionId = data.session_id;
+                
+                // 用 qrcodejs 在页面上画二维码
+                const container = document.getElementById('qrCodeDisplay');
+                container.innerHTML = '';
+                new QRCode(container, {
+                    text: data.qr_url,
+                    width: 200,
+                    height: 200,
+                    colorDark: '#333333',
+                    colorLight: '#ffffff',
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+
+                document.getElementById('qrContainer').classList.remove('hidden');
+                document.getElementById('qrStatus').textContent = '请使用小红书 APP 扫描二维码';
+                document.getElementById('qrStatus').className = 'text-sm text-blue-600';
+                document.getElementById('qrHint').textContent = '扫码后请在手机上确认登录';
+                btn.innerHTML = '🔄 刷新二维码';
+                btn.disabled = false;
+
+                // 开始轮询检查状态
+                startQRPolling();
+            } else {
+                btn.innerHTML = '📱 扫码登录自动获取 Cookie';
+                btn.disabled = false;
+                showToast(data.message, 'error');
+            }
+        })
+        .catch(err => {
+            btn.innerHTML = '📱 扫码登录自动获取 Cookie';
+            btn.disabled = false;
+            showToast('网络错误: ' + (err.message || '请检查服务器连接'), 'error');
+        });
+}
+
+function startQRPolling() {
+    if (qrPollTimer) clearInterval(qrPollTimer);
+    
+    qrPollTimer = setInterval(() => {
+        if (!qrLoginSessionId) {
+            clearInterval(qrPollTimer);
+            return;
+        }
+
+        fetch('/api/login/check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: qrLoginSessionId })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                // 登录成功！
+                clearInterval(qrPollTimer);
+                qrPollTimer = null;
+                qrLoginSessionId = null;
+
+                document.getElementById('qrStatus').textContent = '✅ ' + data.message;
+                document.getElementById('qrStatus').className = 'text-sm text-green-600 font-semibold';
+                document.getElementById('qrHint').textContent = '';
+                document.getElementById('settingCookies').value = data.cookies || '';
+                
+                // 自动保存
+                saveSettings();
+                loadConfig();
+                showToast('🎉 登录成功，Cookie 已自动保存！');
+            } else if (data.message === '二维码已过期，请重新获取') {
+                clearInterval(qrPollTimer);
+                qrPollTimer = null;
+                document.getElementById('qrStatus').textContent = '❌ 二维码已过期，请重新获取';
+                document.getElementById('qrStatus').className = 'text-sm text-red-500';
+            } else {
+                // 还在等待扫码
+                document.getElementById('qrStatus').textContent = data.message || '等待扫码...';
+            }
+        })
+        .catch(() => {}); // 静默处理网络错误
+    }, 2000); // 每2秒检查一次
+}
+
+// ── 工具函数 ──
+function resetForm() {
+    document.getElementById('noteUrl').value = '';
+    document.getElementById('progressArea').classList.add('hidden');
+    document.getElementById('resultArea').classList.add('hidden');
+    updateProgress(0, '');
+}
+
+function copyText(elementId) {
+    const text = document.getElementById(elementId).textContent;
+    navigator.clipboard.writeText(text).then(() => showToast('已复制'));
+}
+
+function downloadAllImages() {
+    if (!currentImages.processed.length) { showToast('没有可下载的图片', 'error'); return; }
+    currentImages.processed.forEach((url, i) => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `processed_${i+1}.jpg`;
+        a.click();
+    });
+}
+
+function toggleLog() {
+    document.getElementById('logPanel').classList.toggle('hidden');
+}
+
+function addLog(msg) {
+    const el = document.getElementById('logContent');
+    const time = new Date().toLocaleTimeString('zh-CN', {hour12: false});
+    const div = document.createElement('div');
+    div.className = 'log-item fade-in';
+    div.innerHTML = `<span class="text-gray-300">${time}</span> <span>${msg}</span>`;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+}
+
+function showToast(msg, type = 'success') {
+    const div = document.createElement('div');
+    div.className = `fixed top-20 right-6 z-50 px-5 py-3 rounded-xl text-sm font-medium shadow-lg fade-in ${
+        type === 'error' ? 'bg-red-500 text-white' : 'bg-gray-900 text-white'
+    }`;
+    div.textContent = msg;
+    document.body.appendChild(div);
+    setTimeout(() => div.remove(), 3000);
+}
+
+// ── Cookie 池管理 ──
+function refreshCookiePool() {
+    const btn = document.getElementById('btnRefreshPool');
+    if (btn) btn.textContent = '⏳ 加载中...';
+
+    fetch('/api/cookie/pool')
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success) return;
+        const pool = data.data;
+        document.getElementById('cookiePoolInfo').textContent =
+            `共 ${pool.total} 条 | ✅ ${pool.valid} 有效 | ❌ ${pool.invalid} 失效`;
+
+        const list = document.getElementById('cookiePoolList');
+        list.innerHTML = '';
+        pool.cookies.forEach(c => {
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-2 p-2 bg-gray-50 rounded-lg text-xs';
+            div.innerHTML = `
+                <span class="w-2 h-2 rounded-full flex-shrink-0 ${c.is_valid ? 'bg-green-500' : 'bg-red-400'}"></span>
+                <span class="flex-1 truncate">${c.username}</span>
+                <span class="text-gray-400">${c.fetch_date ? c.fetch_date.split(' ')[0] : ''}</span>
+                <button onclick="cookiePoolRemove(${c.index})" class="text-red-400 hover:text-red-600 px-1">✕</button>
+            `;
+            list.appendChild(div);
+        });
+
+        if (!pool.cookies.length) {
+            list.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">暂无 Cookie，扫码登录获取第一个</p>';
+        }
+    })
+    .finally(() => { if (btn) btn.textContent = '🔄 刷新'; });
+}
+
+function cookiePoolValidate() {
+    showToast('⏳ 正在验证全部 Cookie...');
+    fetch('/api/cookie/pool/validate', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            const r = data.data;
+            showToast(`验证完成: ✅ ${r.valid} 有效, ❌ ${r.invalid} 失效`);
+            refreshCookiePool();
+        } else {
+            showToast(data.message, 'error');
+        }
+    });
+}
+
+function cookiePoolAutoUpdate() {
+    showToast('⏳ 正在清理失效 Cookie...');
+    fetch('/api/cookie/pool/auto-update', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            const r = data.data;
+            showToast(`清理完成: 移除 ${r.removed} 个，剩余 ${r.total} 个`);
+            refreshCookiePool();
+        } else {
+            showToast(data.message, 'error');
+        }
+    });
+}
+
+function cookiePoolUseBest() {
+    fetch('/api/cookie/pool/use-best', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showToast('✅ ' + data.message);
+            if (data.cookies) {
+                document.getElementById('settingCookies').value = data.cookies;
+            }
+            loadConfig();
+        } else {
+            showToast(data.message, 'error');
+        }
+    });
+}
+
+function cookiePoolRemove(index) {
+    if (!confirm('确定移除此 Cookie？')) return;
+    fetch('/api/cookie/pool/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index })
+    })
+    .then(r => r.json())
+    .then(data => {
+        showToast(data.message);
+        refreshCookiePool();
+    });
+}
+
+// Socket.IO 连接状态
+socket.on('connect', () => addLog('🔌 已连接服务器'));
+socket.on('disconnect', () => addLog('❌ 服务器断开'));
+</script>
+
+</body>
+</html>

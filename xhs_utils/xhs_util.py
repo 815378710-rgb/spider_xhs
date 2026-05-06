@@ -6,14 +6,35 @@ import time
 from urllib.parse import urlencode
 
 import execjs
+
+# === execjs Node.js 运行时补丁 ===
+# execjs 在 Windows Git Bash 环境下无法自动发现 node，手动注册
+def _ensure_node_runtime():
+    node_cmd = r"D:\node.exe"
+    if os.path.exists(node_cmd):
+        from execjs._external_runtime import ExternalRuntime
+        # 检查是否已经注册过
+        for name, rt in execjs._runtimes._runtimes:
+            if name == "Node" and rt.is_available():
+                return
+        node_rt = ExternalRuntime("Node", [node_cmd], execjs._runner_sources.Node)
+        node_rt._available = True
+        execjs._runtimes._runtimes.insert(0, ("Node", node_rt))
+
+_ensure_node_runtime()
+# === end patch ===
+
 from xhs_utils.cookie_util import trans_cookies
 
 _STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
 
+_STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
 
 def _compile_static_js(filename):
     with open(os.path.join(_STATIC_DIR, filename), 'r', encoding='utf-8') as f:
-        return execjs.compile(f.read())
+        return execjs.compile(f.read(), cwd=_PROJECT_ROOT)
 
 
 _JS_CACHE = {}
