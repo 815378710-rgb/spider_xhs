@@ -1,38 +1,20 @@
 """
 土豆小红书助手 - Flask Web 应用
 """
-# === 在所有 import 之前设置 Node.js 环境 ===
-import os as _os
-_project_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-_node_modules = _os.path.join(_project_root, "node_modules")
-if _os.path.isdir(_node_modules):
-    # 只在 NODE_PATH 未设置时才设置，避免累积
-    if not _os.environ.get("NODE_PATH"):
-        _os.environ["NODE_PATH"] = _node_modules
-
-# execjs 在 Windows Git Bash 下找不到 node，手动注册
-import execjs
-from execjs._external_runtime import ExternalRuntime as _ER
-_node_cmd = r"D:\node.exe"
-if _os.path.exists(_node_cmd):
-    _node_rt = _ER("Node", [_node_cmd], execjs._runner_sources.Node)
-    _node_rt._available = True
-    execjs._runtimes._runtimes.insert(0, ("Node", _node_rt))
-    print(f"[PATCH] Node runtime registered, available={execjs.get('Node').is_available()}")
-
+# execjs 补丁在 xhs_utils/xhs_util.py 中统一处理，此处只需确保路径正确
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 import time
+import random
 import threading
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, Response
 from flask_socketio import SocketIO, emit
 from loguru import logger
 from dotenv import load_dotenv
-
-# 添加项目根目录到 Python 路径
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from apis.xhs_pc_apis import XHS_Apis
 from apis.xhs_pc_login_apis import XHSLoginApi
@@ -61,24 +43,149 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'potato-xhs-helper-secret')
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 全局配置
-CONFIG = {
-    'cookies': os.getenv('COOKIES', ''),
-    'llm_provider': os.getenv('LLM_PROVIDER', 'deepseek'),
-    'llm_api_key': os.getenv('LLM_API_KEY', ''),
-    'llm_model': os.getenv('LLM_MODEL', 'deepseek-v3'),
-    'llm_base_url': os.getenv('LLM_BASE_URL', ''),
-}
+# 全局配置（持久化到 config/app_config.json，容器重启不丢失）
+_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "app_config.json")
+
+def _load_config():
+    """从文件加载配置，不存在则用环境变量初始化"""
+    defaults = {
+        'cookies': os.getenv('COOKIES', ''),
+        'llm_provider': os.getenv('LLM_PROVIDER', 'deepseek'),
+        'llm_api_key': os.getenv('LLM_API_KEY', ''),
+        'llm_model': os.getenv('LLM_MODEL', 'deepseek-v3'),
+        'llm_base_url': os.getenv('LLM_BASE_URL', ''),
+    }
+    if os.path.exists(_CONFIG_FILE):
+        try:
+            with open(_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+            defaults.update(saved)
+            logger.info(f"📂 从 {_CONFIG_FILE} 加载配置")
+        except Exception as e:
+            logger.warning(f"加载配置文件失败，使用默认值: {e}")
+    return defaults
+
+def _save_config():
+    """将当前 CONFIG 持久化到文件"""
+    try:
+        os.makedirs(os.path.dirname(_CONFIG_FILE), exist_ok=True)
+        with open(_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(CONFIG, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"保存配置文件失败: {e}")
+
+CONFIG = _load_config()
 logger.info(f"🤖 LLM: provider={CONFIG['llm_provider']}, model={CONFIG['llm_model']}, base_url={CONFIG['llm_base_url']}, key={'✅' if CONFIG['llm_api_key'] else '❌'}")
 
-# 统计数据
-STATS = {
-    'total_processed': 0,
-    'total_rewritten': 0,
-    'today_processed': 0,
-    'today_rewritten': 0,
-    'last_date': datetime.now().strftime('%Y-%m-%d'),
-}
+# ── 持久化存储路径 ──
+_CONFIG_DIR = os.path.dirname(_CONFIG_FILE)
+_STATS_FILE = os.path.join(_CONFIG_DIR, 'stats.json')
+_HISTORY_FILE = os.path.join(_CONFIG_DIR, 'history.json')
+
+# ── 统计数据（从文件加载）──
+def _load_stats():
+    today = datetime.now().strftime('%Y-%m-%d')
+    defaults = {
+        'total_processed': 0, 'total_rewritten': 0,
+        'today_processed': 0, 'today_rewritten': 0, 'last_date': today,
+    }
+    if os.path.exists(_STATS_FILE):
+        try:
+            with open(_STATS_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+            defaults.update(saved)
+        except Exception:
+            pass
+    # 日期轮转
+    if defaults['last_date'] != today:
+        defaults['today_processed'] = 0
+        defaults['today_rewritten'] = 0
+        defaults['last_date'] = today
+    return defaults
+
+def _save_stats():
+    try:
+        os.makedirs(_CONFIG_DIR, exist_ok=True)
+        with open(_STATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(STATS, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"保存统计数据失败: {e}")
+
+STATS = _load_stats()
+
+# ── 历史记录（从文件加载）──
+MAX_HISTORY = 200  # 最多保留 200 条
+
+def _load_history():
+    if os.path.exists(_HISTORY_FILE):
+        try:
+            with open(_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def _save_history():
+    try:
+        os.makedirs(_CONFIG_DIR, exist_ok=True)
+        with open(_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(HISTORY[-MAX_HISTORY:], f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"保存历史记录失败: {e}")
+
+HISTORY = _load_history()
+
+def _add_history(record):
+    """添加一条历史记录（最多保留 MAX_HISTORY 条）"""
+    record['created_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    HISTORY.insert(0, record)
+    if len(HISTORY) > MAX_HISTORY:
+        HISTORY[:] = HISTORY[:MAX_HISTORY]
+    _save_history()
+
+# ── 关键词监控持久化 ──
+_MONITOR_FILE = os.path.join(_CONFIG_DIR, 'monitor.json')
+
+def _load_monitor():
+    if os.path.exists(_MONITOR_FILE):
+        try:
+            with open(_MONITOR_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {'keywords': [], 'results': []}
+
+def _save_monitor(data):
+    try:
+        os.makedirs(_CONFIG_DIR, exist_ok=True)
+        with open(_MONITOR_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"保存监控数据失败: {e}")
+
+MONITOR_DATA = _load_monitor()
+
+# ── 断点续传下载状态 ──
+_DOWNLOAD_STATE_FILE = os.path.join(_CONFIG_DIR, 'download_state.json')
+
+def _load_download_state():
+    if os.path.exists(_DOWNLOAD_STATE_FILE):
+        try:
+            with open(_DOWNLOAD_STATE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def _save_download_state(state):
+    try:
+        os.makedirs(_CONFIG_DIR, exist_ok=True)
+        with open(_DOWNLOAD_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"保存下载状态失败: {e}")
+
+DOWNLOAD_STATE = _load_download_state()
 
 # 任务状态
 TASK_STATUS = {}
@@ -108,6 +215,50 @@ def update_daily_stats():
         STATS['last_date'] = today
 
 
+# ── 图片下载工具 ──────────────────────────────────────────────────────────────
+_XHS_IMG_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+    'Referer': 'https://www.xiaohongshu.com/',
+    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+}
+
+def _download_image(url, save_dir=None):
+    """下载 XHS CDN 图片到本地，返回本地路径 /static/cached_images/xxx.jpg"""
+    import requests as req
+    save_dir = save_dir or os.path.join(os.path.dirname(__file__), 'static', 'cached_images')
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 如果 URL 已经是本地路径，直接返回
+    if url.startswith('/static/'):
+        return url
+
+    # 如果文件名含时间戳，避免重复
+    filename = f"img_{int(time.time() * 1000)}_{random.randint(1000,9999)}.jpg"
+    filepath = os.path.join(save_dir, filename)
+
+    # 多种 headers 尝试下载（CDN 有防盗链）
+    header_sets = [
+        _XHS_IMG_HEADERS,
+        {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://www.xiaohongshu.com/'},
+        {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'},
+        {},
+    ]
+
+    last_error = None
+    for headers in header_sets:
+        try:
+            resp = req.get(url, headers=headers, timeout=20)
+            if resp.status_code == 200 and len(resp.content) > 1000:
+                with open(filepath, 'wb') as f:
+                    f.write(resp.content)
+                return f'/static/cached_images/{filename}'
+            last_error = f"HTTP {resp.status_code}, size={len(resp.content)}"
+        except Exception as e:
+            last_error = str(e)
+
+    raise RuntimeError(f"图片下载失败 ({url[:60]}...): {last_error}")
+
+
 @app.route('/')
 def index():
     """主页"""
@@ -119,9 +270,12 @@ def get_config():
     """获取当前配置"""
     return jsonify({
         'cookies_configured': bool(CONFIG['cookies']),
+        'cookies': CONFIG.get('cookies', ''),
         'llm_provider': CONFIG['llm_provider'],
+        'llm_api_key': CONFIG.get('llm_api_key', ''),
         'llm_model': CONFIG['llm_model'],
         'llm_configured': bool(CONFIG['llm_api_key']),
+        'llm_base_url': CONFIG.get('llm_base_url', ''),
     })
 
 
@@ -139,7 +293,19 @@ def update_config():
         CONFIG['llm_model'] = data['llm_model']
     if 'llm_base_url' in data:
         CONFIG['llm_base_url'] = data['llm_base_url']
-    
+    _save_config()
+
+    # 如果更新了 cookie，自动同步到 cookie 池
+    if 'cookies' in data and data['cookies']:
+        try:
+            from xhs_utils.cookie_util import trans_cookies
+            ck = trans_cookies(data['cookies'])
+            a1 = ck.get('a1', '')
+            if a1:
+                _cookie_pool.add_cookie(data['cookies'], username='active', is_valid=True)
+        except Exception as e:
+            logger.warning(f"同步 cookie 到池失败: {e}")
+
     return jsonify({'success': True, 'message': '配置已更新'})
 
 
@@ -148,6 +314,20 @@ def get_stats():
     """获取统计数据"""
     update_daily_stats()
     return jsonify(STATS)
+
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    """获取历史记录"""
+    return jsonify({'success': True, 'data': HISTORY, 'total': len(HISTORY)})
+
+
+@app.route('/api/history', methods=['DELETE'])
+def delete_history():
+    """清空历史记录"""
+    HISTORY.clear()
+    _save_history()
+    return jsonify({'success': True, 'message': '历史记录已清空'})
 
 
 @app.route('/api/test-cookie', methods=['POST'])
@@ -301,6 +481,20 @@ def _get_fallback_models(provider):
 
 # 存储登录会话
 LOGIN_SESSIONS = {}
+LOGIN_SESSION_TTL = 300  # 5分钟过期
+_LOGIN_SESSION_LAST_CLEANUP = [0]  # mutable container for closure
+
+def _cleanup_login_sessions():
+    """清理过期的登录会话，防止内存泄漏"""
+    now = time.time()
+    if now - _LOGIN_SESSION_LAST_CLEANUP[0] < 60:  # 最多每分钟检查一次
+        return
+    _LOGIN_SESSION_LAST_CLEANUP[0] = now
+    expired = [sid for sid, s in LOGIN_SESSIONS.items() if now - s.get('created_at', 0) > LOGIN_SESSION_TTL]
+    for sid in expired:
+        LOGIN_SESSIONS.pop(sid, None)
+    if expired:
+        logger.info(f"[cleanup] 清理 {len(expired)} 个过期登录会话，剩余 {len(LOGIN_SESSIONS)} 个")
 
 # Cookie 池实例
 from xhs_utils.xhs_cookie import XhsCookie
@@ -316,7 +510,12 @@ def login_qrcode():
     2. generate_qrcode() — 获取二维码
     """
     try:
-        logger.info(f"[DEBUG] execjs Node available: {execjs.get('Node').is_available()}")
+        _cleanup_login_sessions()
+        try:
+            import execjs as _ej
+            logger.info(f"[DEBUG] execjs Node available: {_ej.get('Node').is_available()}")
+        except Exception:
+            pass
 
         # 分步执行，每步单独 try-catch 定位失败点
         login_api = XHSLoginApi()
@@ -396,18 +595,47 @@ def login_check():
         )
         session['cookies'] = cookies
 
+        logger.info(f"[login_check] check_qrcode_status: success={success}, msg={msg}, "
+                     f"cookies keys={list(cookies.keys())}, has_web_session={'web_session' in cookies}")
+
         if success:
             # 扫码成功，获取用户信息并提取 cookie 字符串
             success2, user_info, cookies = login_api.get_user_info(cookies)
+            logger.info(f"[login_check] get_user_info: success={success2}, "
+                         f"cookies keys={list(cookies.keys())}, has_web_session={'web_session' in cookies}")
+
+            # 检查关键 Cookie 是否齐全（web_session 是采集 API 必需的）
+            if 'web_session' not in cookies:
+                logger.warning(f"[login_check] web_session 缺失，尝试额外恢复...")
+                # 尝试直接用 cookie 调用 /user/me 看 Set-Cookie 是否返回 web_session
+                cookies = login_api._try_get_session_from_page(cookies)
+                logger.info(f"[login_check] 恢复后 cookies keys={list(cookies.keys())}, "
+                             f"has_web_session={'web_session' in cookies}")
+
             cookies_str = login_api.cookies_to_str(cookies)
+
+            # 验证 Cookie 是否真正可用（调用 get_user_self_info）
+            logger.info(f"[login_check] 验证 cookie 是否可用...")
+            verify_ok, verify_msg, _ = XHS_Apis().get_user_self_info(cookies_str)
+            logger.info(f"[login_check] 验证结果: ok={verify_ok}, msg={verify_msg}")
+
+            if not verify_ok and 'web_session' not in cookies:
+                # Cookie 不可用且无法恢复，报告失败
+                logger.error(f"[login_check] Cookie 验证失败且 web_session 缺失: {verify_msg}")
+                LOGIN_SESSIONS.pop(session_id, None)
+                return jsonify({
+                    'success': False,
+                    'message': f'登录成功但 Cookie 不完整（缺少 web_session），请重试: {verify_msg[:80]}',
+                })
 
             # 自动保存到配置
             CONFIG['cookies'] = cookies_str
+            _save_config()
 
             # 加入 Cookie 池
             nickname = user_info.get('nickname', '未知') if success2 else '未知'
-            _cookie_pool.add_cookie(cookies_str, username=nickname, is_valid=True)
-            logger.info(f"[login] Cookie 已加入池: {nickname}")
+            _cookie_pool.add_cookie(cookies_str, username=nickname, is_valid=verify_ok)
+            logger.info(f"[login] Cookie 已加入池: {nickname}, verified={verify_ok}")
 
             # 清理会话
             LOGIN_SESSIONS.pop(session_id, None)
@@ -423,7 +651,6 @@ def login_check():
     except Exception as e:
         logger.exception(f"检查扫码状态异常: {e}")
         return jsonify({'success': False, 'message': f'检查状态异常: {str(e)[:80]}'})
-        return jsonify({'success': False, 'message': f'异常: {str(e)}'})
 
 
 @app.route('/api/login/phone/send', methods=['POST'])
@@ -435,6 +662,7 @@ def login_phone_send():
     if not phone:
         return jsonify({'success': False, 'message': '请输入手机号'})
     try:
+        _cleanup_login_sessions()
         login_api = XHSLoginApi()
         cookies = login_api.generate_init_cookies()
         success, msg, _ = login_api.send_phone_code(phone, cookies)
@@ -454,36 +682,82 @@ def login_phone_verify():
     data = request.json
     session_id = data.get('session_id', '')
     code = data.get('code', '').strip()
+    logger.info(f"[phone_verify] session_id={session_id}, code={code}")
+
     session = LOGIN_SESSIONS.get(session_id)
     if not session or session.get('type') != 'phone':
+        logger.error(f"[phone_verify] 会话不存在: session_id={session_id}, sessions={list(LOGIN_SESSIONS.keys())}")
         return jsonify({'success': False, 'message': '会话不存在'})
     if time.time() - session['created_at'] > 300:
         LOGIN_SESSIONS.pop(session_id, None)
         return jsonify({'success': False, 'message': '验证码已过期'})
+
     try:
         login_api = session['login_api']
-        success, msg, result = login_api.login_by_phone(session['phone'], code, session['cookies'])
+        init_cookies = session['cookies']
+        logger.info(f"[phone_verify] init_cookies keys={list(init_cookies.keys())}, has_a1={'a1' in init_cookies}")
+
+        # Step 1: 验证验证码 + 登录
+        success, msg, result = login_api.login_by_phone(
+            session['phone'], code, init_cookies
+        )
+        logger.info(f"[phone_verify] login_by_phone: success={success}, msg={msg}")
+
         if not success:
+            # 登录失败也保存当前 cookies（可能有 sec cookies 等有用的）
+            cookies = init_cookies
+            cookies_str = login_api.cookies_to_str(cookies)
+            logger.warning(f"[phone_verify] 登录失败，但保存 cookies_str={cookies_str[:200]}")
+            CONFIG['cookies'] = cookies_str
+            _save_config()
             return jsonify({'success': False, 'message': msg})
+
+        # Step 2: 获取用户信息
         cookies = result['cookies']
+        logger.info(f"[phone_verify] cookies after login: keys={list(cookies.keys())}")
         s2, user_info, cookies = login_api.get_user_info(cookies)
+        logger.info(f"[phone_verify] get_user_info: success={s2}, keys={list(cookies.keys())}")
+
+        # Step 3: 转成字符串并保存
         cookies_str = login_api.cookies_to_str(cookies)
+        logger.info(f"[phone_verify] cookies_str={cookies_str[:300]}")
+
         CONFIG['cookies'] = cookies_str
-        # 加入 Cookie 池
+        _save_config()
+
         nickname = user_info.get('nickname', '未知') if s2 else '未知'
         _cookie_pool.add_cookie(cookies_str, username=nickname, is_valid=True)
         LOGIN_SESSIONS.pop(session_id, None)
+        logger.info(f"[phone_verify] 登录成功! nickname={nickname}")
         return jsonify({'success': True, 'message': f'登录成功！用户: {nickname}', 'cookies': cookies_str})
+
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
+        logger.exception(f"[phone_verify] 异常: {e}")
+        return jsonify({'success': False, 'message': f'登录异常: {str(e)}'})
 
 
 # ── Cookie 池 API ────────────────────────────────────────────────────────────
 
 @app.route('/api/cookie/pool', methods=['GET'])
 def cookie_pool_info():
-    """获取 Cookie 池概览"""
-    return jsonify({'success': True, 'data': _cookie_pool.get_pool_info()})
+    """获取 Cookie 池概览（包含当前活跃 Cookie）"""
+    info = _cookie_pool.get_pool_info()
+    # 把当前活跃 Cookie 也同步显示（如果池中没有的话）
+    if CONFIG.get('cookies'):
+        from xhs_utils.cookie_util import trans_cookies
+        active_a1 = trans_cookies(CONFIG['cookies']).get('a1', '')
+        in_pool = any(
+            trans_cookies(item.get('cookies_str', '')).get('a1') == active_a1
+            for item in _cookie_pool.pool
+        )
+        if not in_pool and active_a1:
+            info['active_cookie'] = {
+                'a1': active_a1,
+                'is_active': True,
+            }
+        else:
+            info['active_cookie'] = {'a1': active_a1, 'is_active': True}
+    return jsonify({'success': True, 'data': info})
 
 
 @app.route('/api/cookie/pool/validate', methods=['POST'])
@@ -509,10 +783,17 @@ def cookie_pool_auto_update():
 @app.route('/api/cookie/pool/use-best', methods=['POST'])
 def cookie_pool_use_best():
     """从 Cookie 池中取最佳 Cookie 并应用到当前配置"""
+    data = request.json or {}
+    index = data.get('index')
+    if index is not None and 0 <= index < len(_cookie_pool.pool):
+        CONFIG['cookies'] = _cookie_pool.pool[index]['cookies_str']
+        _save_config()
+        return jsonify({'success': True, 'message': f'已应用 Cookie [{index}]'})
     best = _cookie_pool.get_best_cookie()
     if not best:
         return jsonify({'success': False, 'message': 'Cookie 池中没有有效 Cookie'})
     CONFIG['cookies'] = best
+    _save_config()
     return jsonify({'success': True, 'message': '已应用池中最佳 Cookie', 'cookies': best})
 
 
@@ -551,6 +832,7 @@ def collect_note():
         return jsonify({'success': False, 'message': 'Cookie 未配置'})
     
     try:
+        time.sleep(random.uniform(0.5, 1.5))  # 防限流
         xhs = XHS_Apis()
         success, msg, note_info = xhs.get_note_info(note_url, CONFIG['cookies'])
         
@@ -560,11 +842,35 @@ def collect_note():
         note = note_info['data']['items'][0]
         note_card = note['note_card']
         
-        # 提取图片
+        # 提取图片并下载到本地（CDN 403 防盗链，必须本地缓存）
         images = []
-        for img in note_card.get('image_list', []):
-            if 'info_list' in img and len(img['info_list']) > 1:
-                images.append(img['info_list'][1]['url'])
+        image_list = note_card.get('image_list', [])
+        logger.info(f"[collect_note] 图片列表: {len(image_list)} 张")
+        for idx, img in enumerate(image_list):
+            info_list = img.get('info_list', [])
+            # 尝试多种索引: 优先 info_list[1]（大图），fallback info_list[0]
+            cdn_url = None
+            if len(info_list) > 1:
+                cdn_url = info_list[1].get('url', '')
+            elif len(info_list) > 0:
+                cdn_url = info_list[0].get('url', '')
+
+            if not cdn_url:
+                # 尝试 url_default / url_pre 字段
+                cdn_url = img.get('url_default', '') or img.get('url_pre', '') or ''
+
+            if cdn_url:
+                try:
+                    local_path = _download_image(cdn_url)
+                    images.append(local_path)
+                    logger.info(f"[collect_note] 图片 {idx+1} 下载成功: {local_path}")
+                except Exception as e:
+                    logger.warning(f"[collect_note] 图片 {idx+1} 下载失败: {cdn_url[:60]} -> {e}")
+                    images.append(cdn_url)  # fallback to CDN URL
+            else:
+                logger.warning(f"[collect_note] 图片 {idx+1} 无可用URL, keys={list(img.keys())}")
+
+        logger.info(f"[collect_note] 最终图片数: {len(images)}")
         
         result = {
             'note_id': note.get('id', ''),
@@ -621,30 +927,64 @@ def rewrite_note_api():
         return jsonify({'success': False, 'message': f'改写异常: {str(e)}'})
 
 
+@app.route('/api/images/proxy', methods=['GET'])
+def image_proxy():
+    """代理下载小红书 CDN 图片，绕过 Referer 防盗链"""
+    url = request.args.get('url', '')
+    if not url or not url.startswith('http'):
+        return 'Bad Request', 400
+
+    import requests as req
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+            'Referer': 'https://www.xiaohongshu.com/',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+        }
+        resp = req.get(url, headers=headers, timeout=20, stream=True)
+        resp.raise_for_status()
+        content_type = resp.headers.get('Content-Type', 'image/jpeg')
+        from flask import Response as FlaskResponse
+        return FlaskResponse(resp.iter_content(chunk_size=8192), content_type=content_type)
+    except Exception as e:
+        logger.warning(f"图片代理失败: {url[:80]} -> {e}")
+        return 'Image fetch failed', 502
+
+
 @app.route('/api/images/process', methods=['POST'])
 def process_images_api():
     """图片防重处理"""
     data = request.json
-    image_urls = data.get('urls', [])
+    image_paths = data.get('urls', [])
     level = data.get('level', 'medium')
-    
-    if not image_urls:
+
+    if not image_paths:
         return jsonify({'success': False, 'message': '没有图片需要处理'})
-    
-    import requests as req
-    
+
     processed = []
     errors = []
-    
-    for i, url in enumerate(image_urls):
+
+    for i, img_path in enumerate(image_paths):
         try:
-            # 下载图片
-            resp = req.get(url, timeout=15)
-            resp.raise_for_status()
+            # img_path 可能是 /static/cached_images/xxx.jpg 或 CDN URL
+            if img_path.startswith('/static/'):
+                fs_path = os.path.join(os.path.dirname(__file__), img_path.lstrip('/'))
+                with open(fs_path, 'rb') as f:
+                    img_bytes = f.read()
+            else:
+                # Fallback: 尝试下载
+                import requests as req
+                dl_headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'https://www.xiaohongshu.com/',
+                }
+                resp = req.get(img_path, headers=dl_headers, timeout=20)
+                resp.raise_for_status()
+                img_bytes = resp.content
             
             # 防重处理
             from utils.image_processor import process_image
-            processed_bytes = process_image(resp.content, level)
+            processed_bytes = process_image(img_bytes, level)
             
             # 保存到临时目录
             output_dir = os.path.join(os.path.dirname(__file__), 'static', 'processed')
@@ -657,7 +997,7 @@ def process_images_api():
                 f.write(processed_bytes)
             
             processed.append({
-                'original': url,
+                'original': img_path,
                 'processed': f'/static/processed/{filename}',
                 'filename': filename,
             })
@@ -669,7 +1009,7 @@ def process_images_api():
         'success': len(processed) > 0,
         'data': processed,
         'errors': errors,
-        'message': f'处理完成 {len(processed)}/{len(image_urls)} 张',
+        'message': f'处理完成 {len(processed)}/{len(image_paths)} 张',
     })
 
 
@@ -689,6 +1029,7 @@ def batch_search():
         return jsonify({'success': False, 'message': 'Cookie 未配置'})
     
     try:
+        time.sleep(random.uniform(0.5, 1.5))  # 防限流
         xhs = XHS_Apis()
         success, msg, notes = xhs.search_some_note(
             keyword, count, CONFIG['cookies'],
@@ -699,15 +1040,38 @@ def batch_search():
         if not success:
             return jsonify({'success': False, 'message': f'搜索失败: {msg}'})
         
-        # 过滤出笔记类型
+        # 过滤出笔记类型，数据从 note_card 里提取
         note_list = []
         for note in notes:
             if note.get('model_type') == 'note':
+                nc = note.get('note_card', {})
+                # 提取封面图
+                cover = nc.get('cover', {})
+                cover_url = ''
+                cover_info = cover.get('info_list', [])
+                if cover_info:
+                    cover_url = cover_info[0].get('url', '') if cover_info else ''
+                if not cover_url:
+                    cover_url = cover.get('url_default', '') or cover.get('url_pre', '')
+
+                # 提取交互数据
+                interact = nc.get('interact_info', {})
+                liked = interact.get('liked_count', '0')
+
+                # 解析 liked_count（可能是字符串 "1.2万" 之类的）
+                if isinstance(liked, str):
+                    liked_text = liked
+                else:
+                    liked_text = str(liked)
+
                 note_list.append({
                     'id': note.get('id', ''),
-                    'title': note.get('display_title', ''),
-                    'author': note.get('user', {}).get('nickname', ''),
-                    'likes': note.get('interact_info', {}).get('liked_count', 0),
+                    'title': nc.get('title', '') or note.get('display_title', '') or '(无标题)',
+                    'desc': (nc.get('desc', '') or '')[:80],
+                    'author': nc.get('user', {}).get('nickname', '') or '未知',
+                    'likes': liked_text,
+                    'type': nc.get('type', note.get('model_type', '')),
+                    'cover': cover_url,
                     'xsec_token': note.get('xsec_token', ''),
                 })
         
@@ -748,14 +1112,15 @@ def handle_start_task(data):
                 model_override = data.get('model', '')
                 image_level = data.get('image_level', 'medium')
                 
-                # Step 1: 采集
+                # Step 1: 采集（加入随机间隔防限流）
                 socketio.emit('task_progress', {
                     'task_id': task_id,
                     'step': 'collect',
                     'message': '正在采集笔记...',
                     'progress': 10,
                 })
-                
+
+                time.sleep(random.uniform(1.0, 2.0))  # 防限流
                 xhs = XHS_Apis()
                 success, msg, note_info = xhs.get_note_info(url, CONFIG['cookies'])
                 
@@ -766,16 +1131,63 @@ def handle_start_task(data):
                 note = note_info['data']['items'][0]['note_card']
                 title = note.get('title', '')
                 desc = note.get('desc', '')
-                images = [img['info_list'][1]['url'] for img in note.get('image_list', []) if 'info_list' in img and len(img['info_list']) > 1]
-                
+
+                # 提取图片 URL（多种 fallback）
+                raw_images = []
+                image_list = note.get('image_list', [])
+                logger.info(f"[task] 图片列表: {len(image_list)} 张")
+                for img in image_list:
+                    info_list = img.get('info_list', [])
+                    cdn_url = None
+                    if len(info_list) > 1:
+                        cdn_url = info_list[1].get('url', '')
+                    elif len(info_list) > 0:
+                        cdn_url = info_list[0].get('url', '')
+                    if not cdn_url:
+                        cdn_url = img.get('url_default', '') or img.get('url_pre', '') or ''
+                    if cdn_url:
+                        raw_images.append(cdn_url)
+                    else:
+                        logger.warning(f"[task] 图片无可用URL, keys={list(img.keys())}")
+                logger.info(f"[task] 提取到 {len(raw_images)} 张图片URL")
+
                 socketio.emit('task_progress', {
                     'task_id': task_id,
                     'step': 'collect_done',
                     'message': f'采集成功: {title[:20]}...',
+                    'progress': 25,
+                    'data': {'title': title, 'desc': desc, 'images': raw_images},
+                })
+
+                # 下载原图到本地（CDN 有防盗链）
+                socketio.emit('task_progress', {
+                    'task_id': task_id,
+                    'step': 'images',
+                    'message': f'正在下载 {len(raw_images)} 张原图...',
                     'progress': 30,
+                })
+                images = []
+                for i, img_url in enumerate(raw_images):
+                    try:
+                        local_path = _download_image(img_url)
+                        images.append(local_path)
+                    except Exception as e:
+                        logger.warning(f"下载原图失败: {img_url[:60]} -> {e}")
+                    socketio.emit('task_progress', {
+                        'task_id': task_id,
+                        'step': 'images',
+                        'message': f'下载原图 {i+1}/{len(raw_images)}',
+                        'progress': 30 + int(10 * (i + 1) / max(len(raw_images), 1)),
+                    })
+
+                socketio.emit('task_progress', {
+                    'task_id': task_id,
+                    'step': 'collect_done',
+                    'message': f'下载完成，共 {len(images)} 张',
+                    'progress': 40,
                     'data': {'title': title, 'desc': desc, 'images': images},
                 })
-                
+
                 # Step 2: AI 改写
                 socketio.emit('task_progress', {
                     'task_id': task_id,
@@ -795,39 +1207,39 @@ def handle_start_task(data):
                     'data': result,
                 })
                 
-                # Step 3: 图片处理
+                # Step 3: 图片处理（从本地读取，不再下载）
                 socketio.emit('task_progress', {
                     'task_id': task_id,
                     'step': 'images',
                     'message': f'正在处理 {len(images)} 张图片...',
-                    'progress': 70,
+                    'progress': 65,
                 })
-                
+
                 processed_images = []
-                for i, img_url in enumerate(images):
+                for i, img_path in enumerate(images):
                     try:
-                        import requests as req
-                        resp = req.get(img_url, timeout=15)
-                        resp.raise_for_status()
-                        
                         from utils.image_processor import process_image
-                        processed_bytes = process_image(resp.content, image_level)
-                        
+                        # img_path 是 /static/cached_images/xxx.jpg，需要映射到文件系统路径
+                        fs_path = os.path.join(os.path.dirname(__file__), img_path.lstrip('/'))
+                        with open(fs_path, 'rb') as f:
+                            img_bytes = f.read()
+                        processed_bytes = process_image(img_bytes, image_level)
+
                         output_dir = os.path.join(os.path.dirname(__file__), 'static', 'processed')
                         os.makedirs(output_dir, exist_ok=True)
                         filename = f"processed_{int(time.time())}_{i}.jpg"
                         filepath = os.path.join(output_dir, filename)
-                        
+
                         with open(filepath, 'wb') as f:
                             f.write(processed_bytes)
-                        
+
                         processed_images.append(f'/static/processed/{filename}')
-                        
+
                         socketio.emit('task_progress', {
                             'task_id': task_id,
                             'step': 'images',
                             'message': f'图片处理中 {i+1}/{len(images)}',
-                            'progress': 70 + int(20 * (i + 1) / len(images)),
+                            'progress': 65 + int(25 * (i + 1) / max(len(images), 1)),
                         })
                     except Exception as e:
                         logger.warning(f"图片处理失败: {e}")
@@ -838,16 +1250,30 @@ def handle_start_task(data):
                     'data': {
                         'original': {'title': title, 'desc': desc},
                         'rewritten': result,
-                        'images_original': images,
-                        'images_processed': processed_images,
+                        'images_original': images,        # 本地路径
+                        'images_processed': processed_images,  # 本地路径
                     },
                 })
-                
+
                 update_daily_stats()
                 STATS['today_processed'] += 1
                 STATS['today_rewritten'] += 1
                 STATS['total_processed'] += 1
                 STATS['total_rewritten'] += 1
+                _save_stats()
+
+                # 记录到历史
+                _add_history({
+                    'type': 'rewrite',
+                    'title': title,
+                    'desc': desc,
+                    'rewritten_title': result.get('title', ''),
+                    'rewritten_desc': result.get('desc', ''),
+                    'images_count': len(processed_images),
+                    'style': style,
+                    'model': model_override or CONFIG['llm_model'],
+                    'url': url,
+                })
                 
         except Exception as e:
             logger.exception(f"任务执行异常: {e}")
@@ -863,6 +1289,833 @@ def handle_start_task(data):
     emit('task_started', {'task_id': task_id})
 
 
+@app.route('/api/cookie/collect', methods=['POST'])
+def cookie_collect():
+    """接收 Chrome 插件发送的 Cookie"""
+    data = request.json or {}
+    cookies_str = data.get('cookies', '').strip()
+    source = data.get('source', 'unknown')
+
+    if not cookies_str:
+        return jsonify({'success': False, 'message': '未收到 Cookie 数据'})
+
+    # 验证 Cookie
+    try:
+        xhs = XHS_Apis()
+        success, msg, user_info = xhs.get_user_self_info(cookies_str)
+        nickname = '未知'
+        is_valid = False
+        if success:
+            nickname = user_info.get('data', {}).get('basic_info', {}).get('nickname', '未知')
+            is_valid = True
+        else:
+            logger.warning(f"[cookie_collect] Cookie 验证失败: {msg}")
+    except Exception as e:
+        logger.error(f"[cookie_collect] 验证异常: {e}")
+        nickname = '未知'
+        is_valid = False
+
+    # 保存到配置
+    CONFIG['cookies'] = cookies_str
+    _save_config()
+
+    # 加入 Cookie 池
+    _cookie_pool.add_cookie(cookies_str, username=nickname, is_valid=is_valid)
+
+    logger.info(f"[cookie_collect] 从 {source} 采集 Cookie，用户: {nickname}, 有效: {is_valid}")
+    return jsonify({
+        'success': True,
+        'message': f'Cookie 已采集！用户: {nickname}' + (' (验证通过)' if is_valid else ' (验证未通过，但已保存)'),
+        'nickname': nickname,
+        'is_valid': is_valid,
+    })
+
+
+@app.route('/api/model/switch', methods=['POST'])
+def model_switch():
+    """快捷切换 AI 模型"""
+    data = request.json or {}
+    model = data.get('model', '').strip()
+    if not model:
+        return jsonify({'success': False, 'message': '请选择模型'})
+
+    CONFIG['llm_model'] = model
+    _save_config()
+    logger.info(f"[model_switch] 切换模型到: {model}")
+    return jsonify({'success': True, 'message': f'模型已切换为 {model}', 'model': model})
+
+
+@app.route('/api/cookie/pool/detail', methods=['GET'])
+def cookie_pool_detail():
+    """获取 Cookie 池中某个 Cookie 的详细信息"""
+    index = request.args.get('index', type=int)
+    if index is None or index < 0 or index >= len(_cookie_pool.pool):
+        return jsonify({'success': False, 'message': '无效索引'})
+
+    item = _cookie_pool.pool[index]
+    from xhs_utils.cookie_util import trans_cookies
+    ck = trans_cookies(item.get('cookies_str', ''))
+    return jsonify({
+        'success': True,
+        'data': {
+            'index': index,
+            'username': item.get('username', '未知'),
+            'is_valid': item.get('is_valid', False),
+            'fetch_date': item.get('fetch_date', ''),
+            'last_check': item.get('last_check', ''),
+            'a1': ck.get('a1', '')[:12] + '...' if ck.get('a1') else '(无)',
+            'web_session': '✅' if ck.get('web_session') else '❌',
+            'cookie_keys': list(ck.keys()),
+        }
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 功能 1: 关键词监控 + AI 情报分析
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/monitor/keywords', methods=['GET'])
+def monitor_keywords():
+    """获取所有监控关键词"""
+    return jsonify({'success': True, 'data': MONITOR_DATA.get('keywords', [])})
+
+
+@app.route('/api/monitor/keywords', methods=['POST'])
+def monitor_add_keyword():
+    """添加监控关键词"""
+    data = request.json or {}
+    keyword = data.get('keyword', '').strip()
+    interval = data.get('interval', 60)  # 分钟
+    sort_type = data.get('sort_type', 0)
+    note_type = data.get('note_type', 0)
+
+    if not keyword:
+        return jsonify({'success': False, 'message': '请输入关键词'})
+
+    # 去重
+    for kw in MONITOR_DATA.get('keywords', []):
+        if kw['keyword'] == keyword:
+            return jsonify({'success': False, 'message': '该关键词已在监控列表中'})
+
+    kw_item = {
+        'id': f"kw_{int(time.time() * 1000)}",
+        'keyword': keyword,
+        'interval': interval,
+        'sort_type': sort_type,
+        'note_type': note_type,
+        'enabled': True,
+        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'last_check': None,
+        'total_found': 0,
+    }
+    MONITOR_DATA.setdefault('keywords', []).append(kw_item)
+    _save_monitor(MONITOR_DATA)
+    return jsonify({'success': True, 'message': f'已添加监控: {keyword}', 'data': kw_item})
+
+
+@app.route('/api/monitor/keywords/<kw_id>', methods=['DELETE'])
+def monitor_delete_keyword(kw_id):
+    """删除监控关键词"""
+    kws = MONITOR_DATA.get('keywords', [])
+    for i, kw in enumerate(kws):
+        if kw['id'] == kw_id:
+            kws.pop(i)
+            _save_monitor(MONITOR_DATA)
+            return jsonify({'success': True, 'message': '已删除'})
+    return jsonify({'success': False, 'message': '未找到该关键词'})
+
+
+@app.route('/api/monitor/keywords/<kw_id>/toggle', methods=['POST'])
+def monitor_toggle_keyword(kw_id):
+    """启用/禁用监控关键词"""
+    for kw in MONITOR_DATA.get('keywords', []):
+        if kw['id'] == kw_id:
+            kw['enabled'] = not kw.get('enabled', True)
+            _save_monitor(MONITOR_DATA)
+            return jsonify({'success': True, 'enabled': kw['enabled']})
+    return jsonify({'success': False, 'message': '未找到该关键词'})
+
+
+@app.route('/api/monitor/check', methods=['POST'])
+def monitor_check():
+    """手动触发一次关键词监控检查"""
+    data = request.json or {}
+    kw_id = data.get('keyword_id')
+
+    if not CONFIG['cookies']:
+        return jsonify({'success': False, 'message': 'Cookie 未配置'})
+
+    targets = []
+    if kw_id:
+        for kw in MONITOR_DATA.get('keywords', []):
+            if kw['id'] == kw_id:
+                targets = [kw]
+                break
+    else:
+        targets = [kw for kw in MONITOR_DATA.get('keywords', []) if kw.get('enabled', True)]
+
+    if not targets:
+        return jsonify({'success': False, 'message': '没有启用的监控关键词'})
+
+    xhs = XHS_Apis()
+    all_new = []
+
+    for kw in targets:
+        try:
+            time.sleep(random.uniform(1.0, 2.5))
+            success, msg, notes = xhs.search_some_note(
+                kw['keyword'], 20, CONFIG['cookies'],
+                sort_type_choice=kw.get('sort_type', 0),
+                note_type=kw.get('note_type', 0),
+            )
+            if not success:
+                logger.warning(f"[monitor] 搜索 '{kw['keyword']}' 失败: {msg}")
+                continue
+
+            # 去重：只保留新笔记
+            seen_ids = set(r['note_id'] for r in MONITOR_DATA.get('results', []) if r.get('keyword') == kw['keyword'])
+            new_notes = []
+            for note in notes:
+                note_id = note.get('id', '')
+                if note_id and note_id not in seen_ids:
+                    nc = note.get('note_card', {})
+                    interact = nc.get('interact_info', {})
+                    liked = interact.get('liked_count', '0')
+                    comment = interact.get('comment_count', '0')
+                    collect = interact.get('collected_count', '0')
+                    new_notes.append({
+                        'note_id': note_id,
+                        'keyword': kw['keyword'],
+                        'title': nc.get('title', '') or '(无标题)',
+                        'desc': (nc.get('desc', '') or '')[:200],
+                        'author': nc.get('user', {}).get('nickname', ''),
+                        'author_id': nc.get('user', {}).get('user_id', ''),
+                        'liked_count': liked,
+                        'comment_count': comment,
+                        'collected_count': collect,
+                        'type': nc.get('type', ''),
+                        'xsec_token': note.get('xsec_token', ''),
+                        'found_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    })
+
+            all_new.extend(new_notes)
+            kw['last_check'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            kw['total_found'] = kw.get('total_found', 0) + len(new_notes)
+        except Exception as e:
+            logger.exception(f"[monitor] 检查关键词 '{kw['keyword']}' 异常: {e}")
+
+    # 保存新结果
+    MONITOR_DATA.setdefault('results', []).extend(all_new)
+    # 只保留最近 500 条
+    if len(MONITOR_DATA['results']) > 500:
+        MONITOR_DATA['results'] = MONITOR_DATA['results'][-500:]
+    _save_monitor(MONITOR_DATA)
+
+    return jsonify({
+        'success': True,
+        'new_count': len(all_new),
+        'data': all_new,
+        'message': f'发现 {len(all_new)} 条新笔记',
+    })
+
+
+@app.route('/api/monitor/results', methods=['GET'])
+def monitor_results():
+    """获取监控结果"""
+    keyword = request.args.get('keyword', '')
+    limit = request.args.get('limit', 100, type=int)
+    results = MONITOR_DATA.get('results', [])
+    if keyword:
+        results = [r for r in results if r.get('keyword') == keyword]
+    return jsonify({'success': True, 'data': results[-limit:]})
+
+
+@app.route('/api/monitor/results', methods=['DELETE'])
+def monitor_clear_results():
+    """清空监控结果"""
+    MONITOR_DATA['results'] = []
+    _save_monitor(MONITOR_DATA)
+    return jsonify({'success': True, 'message': '已清空监控结果'})
+
+
+@app.route('/api/monitor/analyze', methods=['POST'])
+def monitor_analyze():
+    """AI 情报分析：对监控到的笔记进行趋势分析"""
+    data = request.json or {}
+    keyword = data.get('keyword', '')
+
+    if not CONFIG['llm_api_key']:
+        return jsonify({'success': False, 'message': 'AI API Key 未配置'})
+
+    # 获取该关键词的监控结果
+    results = MONITOR_DATA.get('results', [])
+    if keyword:
+        results = [r for r in results if r.get('keyword') == keyword]
+
+    if not results:
+        return jsonify({'success': False, 'message': '没有监控到的数据可供分析'})
+
+    # 构建分析 prompt
+    notes_summary = []
+    for r in results[-30:]:  # 最多分析30条
+        notes_summary.append(
+            f"- 标题: {r['title']}, 作者: {r['author']}, "
+            f"点赞: {r.get('liked_count', 0)}, 评论: {r.get('comment_count', 0)}, "
+            f"收藏: {r.get('collected_count', 0)}\n  摘要: {r.get('desc', '')[:100]}"
+        )
+
+    prompt = f"""你是一个小红书数据分析专家。请基于以下监控到的关于"{keyword}"的最新笔记数据，给出情报分析报告：
+
+{chr(10).join(notes_summary)}
+
+请从以下维度分析并用中文回答：
+1. **热度趋势**：当前该话题的整体热度如何
+2. **内容方向**：最受欢迎的内容类型和角度
+3. **高赞特征**：高互动量笔记的共同特征（标题、内容风格、封面等）
+4. **竞品洞察**：头部创作者是谁，他们在做什么
+5. **机会建议**：如果要创作相关内容，建议的方向和策略
+
+请给出结构化的分析报告，带具体数据支撑。"""
+
+    try:
+        # 直接复用 rewrite_note 的 LLM 调用通道
+        backend = get_llm_backend()
+        if not backend:
+            return jsonify({'success': False, 'message': '创建 AI 后端失败，请检查 AI 配置'})
+
+        system_prompt = "你是一个小红书数据分析专家，擅长从数据中提取趋势洞察。请用结构化中文回答。"
+        analysis = backend.chat(system_prompt, prompt)
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'analysis': analysis,
+                'notes_count': len(results),
+                'keyword': keyword or '(全部关键词)',
+            }
+        })
+    except Exception as e:
+        logger.exception(f"[monitor] AI 分析异常: {e}")
+        return jsonify({'success': False, 'message': f'AI 分析失败: {str(e)}'})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 功能 2: KOL 筛选 + 智能匹配
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/kol/search', methods=['POST'])
+def kol_search():
+    """搜索 KOL 用户"""
+    data = request.json or {}
+    keyword = data.get('keyword', '').strip()
+    count = data.get('count', 20)
+
+    if not keyword:
+        return jsonify({'success': False, 'message': '请输入搜索关键词'})
+    if not CONFIG['cookies']:
+        return jsonify({'success': False, 'message': 'Cookie 未配置'})
+
+    try:
+        time.sleep(random.uniform(0.5, 1.5))
+        xhs = XHS_Apis()
+        success, msg, users = xhs.search_some_user(keyword, count, CONFIG['cookies'])
+
+        if not success:
+            return jsonify({'success': False, 'message': f'搜索失败: {msg}'})
+
+        kol_list = []
+        for u in users:
+            # XHS search_user API 返回扁平结构: {id, name, fans, red_id, note_count, image, profession, ...}
+            # 兼容两种格式: 扁平结构和嵌套结构 (basic_info/interact_info)
+            basic = u.get('basic_info', u)   # 扁平结构时 fallback 到 u 自身
+            interact = u.get('interact_info', u)
+
+            user_id = basic.get('user_id', '') or u.get('id', '')
+            nickname = basic.get('nickname', '') or u.get('name', '')
+            desc = basic.get('desc', '') or u.get('profession', '')
+            red_id = basic.get('red_id', '') or u.get('red_id', '')
+            image_url = u.get('image', '') or (basic.get('images', [None])[0] if basic.get('images') else '')
+
+            # 粉丝数: 从 interact 或直接从 u 取
+            fans_raw = interact.get('fans', 0) or u.get('fans', 0)
+            fans = _parse_count(fans_raw)
+
+            # 互动数据: 可能是嵌套结构或缺失
+            interaction = interact.get('interaction', {})
+            liked = _parse_count(interaction.get('liked', 0)) if interaction else 0
+            collected = _parse_count(interaction.get('collected', 0)) if interaction else 0
+            comment = _parse_count(interaction.get('comment', 0)) if interaction else 0
+            interact_total = liked + collected + comment
+
+            # 互动率 = 总互动 / 粉丝数（越高越好）
+            engagement_rate = round(interact_total / max(fans, 1) * 100, 2)
+
+            # KOL 综合评分 (0-100)
+            score = _calc_kol_score(fans, interact_total, engagement_rate)
+
+            kol_list.append({
+                'user_id': user_id,
+                'nickname': nickname,
+                'desc': desc,
+                'gender': basic.get('gender', ''),
+                'red_id': red_id,
+                'fans': fans,
+                'fans_display': fans_raw,
+                'liked': liked,
+                'collected': collected,
+                'comment': comment,
+                'engagement_rate': engagement_rate,
+                'score': score,
+                'image': image_url,
+                'note_count': u.get('note_count', 0),
+                'update_time': u.get('update_time', ''),
+                'is_official': u.get('red_official_verified', False),
+                'xsec_token': u.get('xsec_token', ''),
+            })
+
+        # 按评分排序
+        kol_list.sort(key=lambda x: x['score'], reverse=True)
+
+        return jsonify({'success': True, 'data': kol_list, 'message': f'找到 {len(kol_list)} 个用户'})
+    except Exception as e:
+        logger.exception(f"[kol] 搜索异常: {e}")
+        return jsonify({'success': False, 'message': f'搜索异常: {str(e)}'})
+
+
+@app.route('/api/kol/profile', methods=['POST'])
+def kol_profile():
+    """获取 KOL 详细信息 + 最近笔记"""
+    data = request.json or {}
+    user_id = data.get('user_id', '').strip()
+    user_url = data.get('url', '').strip()
+
+    if not user_id and not user_url:
+        return jsonify({'success': False, 'message': '请输入用户 ID 或主页链接'})
+    if not CONFIG['cookies']:
+        return jsonify({'success': False, 'message': 'Cookie 未配置'})
+
+    try:
+        time.sleep(random.uniform(0.5, 1.5))
+        xhs = XHS_Apis()
+
+        # 获取用户信息
+        if user_id:
+            success, msg, user_info = xhs.get_user_info(user_id, CONFIG['cookies'])
+        else:
+            success, msg, user_info = xhs.get_user_all_notes(user_url, CONFIG['cookies'])
+
+        if not success:
+            return jsonify({'success': False, 'message': f'获取失败: {msg}'})
+
+        # 获取用户笔记
+        notes = []
+        if user_id:
+            time.sleep(random.uniform(0.5, 1.5))
+            try:
+                nsuccess, nmsg, note_data = xhs.get_user_note_info(user_id, '', CONFIG['cookies'])
+                if nsuccess and note_data:
+                    for n in note_data.get('notes', []):
+                        nc = n.get('note_card', {})
+                        interact = nc.get('interact_info', {})
+                        notes.append({
+                            'note_id': n.get('id', ''),
+                            'title': nc.get('title', '') or '(无标题)',
+                            'desc': (nc.get('desc', '') or '')[:100],
+                            'liked': interact.get('liked_count', '0'),
+                            'collected': interact.get('collected_count', '0'),
+                            'comment': interact.get('comment_count', '0'),
+                            'type': nc.get('type', ''),
+                        })
+            except Exception as e:
+                logger.warning(f"[kol] 获取笔记列表失败: {e}")
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'user_info': user_info,
+                'recent_notes': notes,
+            }
+        })
+    except Exception as e:
+        logger.exception(f"[kol] 获取详情异常: {e}")
+        return jsonify({'success': False, 'message': f'获取异常: {str(e)}'})
+
+
+@app.route('/api/kol/filter', methods=['POST'])
+def kol_filter():
+    """筛选 KOL 列表（前端过滤用，但也可后端过滤）"""
+    data = request.json or {}
+    min_fans = data.get('min_fans', 0)
+    max_fans = data.get('max_fans', 999999999)
+    min_engagement = data.get('min_engagement', 0)
+    min_score = data.get('min_score', 0)
+    kol_list = data.get('kol_list', [])
+
+    filtered = []
+    for kol in kol_list:
+        fans = kol.get('fans', 0)
+        eng = kol.get('engagement_rate', 0)
+        score = kol.get('score', 0)
+        if min_fans <= fans <= max_fans and eng >= min_engagement and score >= min_score:
+            filtered.append(kol)
+
+    return jsonify({'success': True, 'data': filtered, 'message': f'筛选出 {len(filtered)} 个 KOL'})
+
+
+def _parse_count(val):
+    """解析数量字符串（支持 '1.2万' 格式）"""
+    if isinstance(val, (int, float)):
+        return int(val)
+    if not val:
+        return 0
+    val = str(val).strip()
+    if '万' in val:
+        try:
+            return int(float(val.replace('万', '').strip()) * 10000)
+        except:
+            return 0
+    try:
+        return int(float(val))
+    except:
+        return 0
+
+
+def _calc_kol_score(fans, total_interact, engagement_rate):
+    """KOL 综合评分 (0-100)"""
+    import math
+    # 粉丝分 (0-40)
+    fans_score = min(40, 40 * math.log10(max(fans, 1)) / math.log10(1000000))
+    # 互动量分 (0-30)
+    interact_score = min(30, 30 * math.log10(max(total_interact, 1)) / math.log10(1000000))
+    # 互动率分 (0-30)：1-5% 最佳区间
+    if engagement_rate >= 1 and engagement_rate <= 5:
+        eng_score = 30
+    elif engagement_rate < 1:
+        eng_score = max(0, 30 * engagement_rate)
+    else:
+        eng_score = max(0, 30 - (engagement_rate - 5) * 2)  # 超过5%递减
+
+    return round(fans_score + interact_score + eng_score, 1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 功能 3: 断点续传下载
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/download/batch', methods=['POST'])
+def download_batch():
+    """批量下载笔记的图片/视频，支持断点续传"""
+    data = request.json or {}
+    items = data.get('items', [])  # [{url, images: [...], note_id}]
+    save_dir_name = data.get('folder', 'batch_download')
+
+    if not items:
+        return jsonify({'success': False, 'message': '没有下载任务'})
+
+    import requests as req
+    save_dir = os.path.join(os.path.dirname(__file__), 'static', save_dir_name)
+    os.makedirs(save_dir, exist_ok=True)
+
+    results = []
+    total = sum(len(item.get('images', [])) for item in items)
+    completed = 0
+
+    for item in items:
+        note_id = item.get('note_id', f"note_{int(time.time())}")
+        images = item.get('images', [])
+        item_dir = os.path.join(save_dir, note_id)
+        os.makedirs(item_dir, exist_ok=True)
+
+        item_result = {'note_id': note_id, 'files': [], 'failed': []}
+
+        for idx, img_url in enumerate(images):
+            file_key = f"{note_id}_{idx}"
+            state = DOWNLOAD_STATE.get(file_key, {})
+
+            # 断点续传：跳过已下载的
+            if state.get('status') == 'done' and os.path.exists(state.get('path', '')):
+                item_result['files'].append(state['path'])
+                completed += 1
+                continue
+
+            filename = f"img_{idx + 1}.jpg"
+            filepath = os.path.join(item_dir, filename)
+
+            try:
+                # 多 headers 下载（每组 headers 用新 dict，避免 Range 污染）
+                header_sets = [
+                    _XHS_IMG_HEADERS.copy(),
+                    {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://www.xiaohongshu.com/'},
+                    {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'},
+                ]
+
+                success_dl = False
+                for headers in header_sets:
+                    try:
+                        # 如果有部分下载记录，先尝试 Range 续传
+                        resume_pos = state.get('downloaded', 0) if state.get('status') == 'partial' else 0
+                        dl_headers = dict(headers)
+                        if resume_pos > 0 and os.path.exists(filepath):
+                            dl_headers['Range'] = f'bytes={resume_pos}-'
+                            resp = req.get(img_url, headers=dl_headers, timeout=30, stream=True)
+                            if resp.status_code in (200, 206):
+                                with open(filepath, 'ab') as f:
+                                    for chunk in resp.iter_content(chunk_size=8192):
+                                        f.write(chunk)
+                                resp.close()
+                            else:
+                                # 续传不支持，重新全量下载
+                                resume_pos = 0
+                                resp.close()
+
+                        if resume_pos == 0:
+                            resp = req.get(img_url, headers=dl_headers, timeout=30, stream=True)
+                            if resp.status_code == 200:
+                                with open(filepath, 'wb') as f:
+                                    for chunk in resp.iter_content(chunk_size=8192):
+                                        f.write(chunk)
+                                resp.close()
+                            else:
+                                DOWNLOAD_STATE[file_key] = {
+                                    'status': 'partial',
+                                    'downloaded': os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+                                }
+                                continue
+
+                        file_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+                        if file_size > 1000:
+                            DOWNLOAD_STATE[file_key] = {
+                                'status': 'done',
+                                'path': f'/static/{save_dir_name}/{note_id}/{filename}',
+                                'size': file_size,
+                            }
+                            _save_download_state(DOWNLOAD_STATE)
+                            item_result['files'].append(f'/static/{save_dir_name}/{note_id}/{filename}')
+                            success_dl = True
+                            completed += 1
+                            break
+                        else:
+                            # 文件太小，可能是防盗链拒绝
+                            if os.path.exists(filepath):
+                                os.remove(filepath)
+                            DOWNLOAD_STATE[file_key] = {
+                                'status': 'partial',
+                                'downloaded': 0,
+                            }
+                    except Exception as e:
+                        logger.warning(f"[download] 下载异常: {e}")
+                        continue
+
+                if not success_dl:
+                    item_result['failed'].append(idx + 1)
+                    DOWNLOAD_STATE[file_key] = {'status': 'failed'}
+            except Exception as e:
+                logger.warning(f"[download] 下载失败: {img_url[:60]} -> {e}")
+                item_result['failed'].append(idx + 1)
+
+        results.append(item_result)
+
+    _save_download_state(DOWNLOAD_STATE)
+    return jsonify({
+        'success': True,
+        'completed': completed,
+        'total': total,
+        'results': results,
+        'message': f'下载完成 {completed}/{total}',
+    })
+
+
+@app.route('/api/download/resume', methods=['POST'])
+def download_resume():
+    """获取断点续传状态"""
+    data = request.json or {}
+    note_ids = data.get('note_ids', [])
+    save_dir_name = data.get('folder', 'batch_download')
+
+    status_list = []
+    for note_id in note_ids:
+        note_files = {}
+        note_state = {'note_id': note_id, 'files': [], 'pending': []}
+        for key, state in DOWNLOAD_STATE.items():
+            if key.startswith(note_id):
+                if state.get('status') == 'done':
+                    note_state['files'].append(state)
+                else:
+                    note_state['pending'].append({**state, 'key': key})
+        status_list.append(note_state)
+
+    return jsonify({'success': True, 'data': status_list})
+
+
+@app.route('/api/download/clear-state', methods=['POST'])
+def download_clear_state():
+    """清除下载状态"""
+    global DOWNLOAD_STATE
+    DOWNLOAD_STATE = {}
+    _save_download_state(DOWNLOAD_STATE)
+    return jsonify({'success': True, 'message': '下载状态已清除'})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 功能 4: 批量用户主页采集
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/user/batch', methods=['POST'])
+def user_batch_collect():
+    """批量采集用户主页笔记"""
+    data = request.json or {}
+    user_urls = data.get('urls', [])  # 用户主页 URL 列表
+    max_notes = data.get('max_notes', 50)  # 每个用户最多采集多少条
+
+    if not user_urls:
+        return jsonify({'success': False, 'message': '请输入至少一个用户主页链接'})
+    if not CONFIG['cookies']:
+        return jsonify({'success': False, 'message': 'Cookie 未配置'})
+
+    xhs = XHS_Apis()
+    results = []
+
+    for url in user_urls:
+        url = url.strip()
+        if not url:
+            continue
+
+        try:
+            time.sleep(random.uniform(1.0, 2.0))
+            success, msg, user_data = xhs.get_user_all_notes(url, CONFIG['cookies'])
+
+            if not success:
+                results.append({'url': url, 'success': False, 'message': msg, 'notes': []})
+                continue
+
+            # 提取用户信息
+            user_info = user_data.get('basic_info', {}) if isinstance(user_data, dict) else {}
+            notes_raw = user_data.get('notes', []) if isinstance(user_data, dict) else []
+
+            notes = []
+            for n in notes_raw[:max_notes]:
+                nc = n.get('note_card', {})
+                interact = nc.get('interact_info', {})
+                notes.append({
+                    'note_id': n.get('id', ''),
+                    'title': nc.get('title', '') or '(无标题)',
+                    'desc': (nc.get('desc', '') or '')[:200],
+                    'liked': interact.get('liked_count', '0'),
+                    'collected': interact.get('collected_count', '0'),
+                    'comment': interact.get('comment_count', '0'),
+                    'type': nc.get('type', ''),
+                    'xsec_token': n.get('xsec_token', ''),
+                    # 图片
+                    'images': [
+                        img.get('info_list', [{}])[1 if len(img.get('info_list', [])) > 1 else 0].get('url', '')
+                        if img.get('info_list')
+                        else img.get('url_default', '')
+                        for img in nc.get('image_list', [])
+                        if img.get('info_list') or img.get('url_default')
+                    ],
+                })
+
+            results.append({
+                'url': url,
+                'success': True,
+                'user': {
+                    'nickname': user_info.get('nickname', ''),
+                    'user_id': user_info.get('user_id', ''),
+                    'desc': user_info.get('desc', ''),
+                    'fans': user_info.get('fans', 0),
+                },
+                'notes': notes,
+                'total_notes': len(notes),
+            })
+        except Exception as e:
+            logger.exception(f"[batch_user] 采集用户 {url} 异常: {e}")
+            results.append({'url': url, 'success': False, 'message': str(e), 'notes': []})
+
+    # 汇总统计
+    total_notes = sum(len(r['notes']) for r in results)
+    success_count = sum(1 for r in results if r['success'])
+    return jsonify({
+        'success': True,
+        'data': results,
+        'summary': {
+            'total_users': len(user_urls),
+            'success_users': success_count,
+            'total_notes': total_notes,
+        },
+        'message': f'采集完成: {success_count}/{len(user_urls)} 个用户, 共 {total_notes} 条笔记',
+    })
+
+
+@app.route('/api/user/notes', methods=['POST'])
+def user_notes():
+    """采集单个用户的全部笔记（支持翻页）"""
+    data = request.json or {}
+    user_id = data.get('user_id', '').strip()
+    cursor = data.get('cursor', '')
+
+    if not user_id:
+        return jsonify({'success': False, 'message': '请输入用户 ID'})
+    if not CONFIG['cookies']:
+        return jsonify({'success': False, 'message': 'Cookie 未配置'})
+
+    try:
+        time.sleep(random.uniform(0.5, 1.5))
+        xhs = XHS_Apis()
+        success, msg, note_data = xhs.get_user_note_info(user_id, cursor, CONFIG['cookies'])
+
+        if not success:
+            return jsonify({'success': False, 'message': f'获取失败: {msg}'})
+
+        notes = []
+        for n in note_data.get('notes', []):
+            nc = n.get('note_card', {})
+            interact = nc.get('interact_info', {})
+            notes.append({
+                'note_id': n.get('id', ''),
+                'title': nc.get('title', '') or '(无标题)',
+                'desc': (nc.get('desc', '') or '')[:200],
+                'liked': interact.get('liked_count', '0'),
+                'collected': interact.get('collected_count', '0'),
+                'comment': interact.get('comment_count', '0'),
+                'type': nc.get('type', ''),
+                'xsec_token': n.get('xsec_token', ''),
+            })
+
+        return jsonify({
+            'success': True,
+            'data': notes,
+            'has_more': note_data.get('has_more', False),
+            'cursor': note_data.get('cursor', ''),
+        })
+    except Exception as e:
+        logger.exception(f"[user_notes] 获取异常: {e}")
+        return jsonify({'success': False, 'message': f'获取异常: {str(e)}'})
+
+
+@app.route('/api/plugin/download', methods=['GET'])
+def download_plugin():
+    """下载 Chrome 插件 zip 包"""
+    import zipfile
+    import io
+
+    plugin_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'chrome_extension')
+    if not os.path.exists(plugin_dir):
+        return jsonify({'success': False, 'message': '插件目录不存在'}), 404
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(plugin_dir):
+            for f in files:
+                filepath = os.path.join(root, f)
+                arcname = os.path.relpath(filepath, plugin_dir)
+                zf.write(filepath, arcname)
+    buf.seek(0)
+
+    from flask import send_file
+    return send_file(buf, mimetype='application/zip', as_attachment=True,
+                     download_name='xhs-cookie-collector.zip')
+
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
@@ -870,4 +2123,4 @@ if __name__ == '__main__':
     logger.info(f"🥔 土豆小红书助手启动中...")
     logger.info(f"📡 访问地址: http://localhost:{port}")
     
-    socketio.run(app, host='0.0.0.0', port=port, debug=debug)
+    socketio.run(app, host='0.0.0.0', port=port, debug=debug, allow_unsafe_werkzeug=True)

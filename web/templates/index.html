@@ -67,7 +67,7 @@
             <div class="w-10 h-10 bg-gradient-to-br from-xhs to-xhs_light rounded-xl flex items-center justify-center text-white text-xl">🥔</div>
             <div>
                 <h1 class="text-lg font-bold text-gray-900">土豆小红书助手</h1>
-                <p class="text-xs text-gray-400">采集 · 改写 · 图片处理</p>
+                <p class="text-xs text-gray-400">采集 · 改写 · 监控 · KOL筛选</p>
             </div>
         </div>
         <div class="flex items-center gap-3">
@@ -75,9 +75,10 @@
                 <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
                 检测中...
             </div>
-            <div id="llmStatus" class="badge badge-yellow">
+            <div id="llmStatus" class="badge badge-yellow cursor-pointer hover:shadow-md transition-all" onclick="openModelSwitch()">
                 <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
-                AI 模型
+                <span id="llmModelName">AI 模型</span>
+                <span class="text-[10px] opacity-60">▾</span>
             </div>
             <button onclick="openSettings()" class="btn-secondary flex items-center gap-2">
                 ⚙️ 设置
@@ -90,9 +91,12 @@
 <div class="max-w-7xl mx-auto px-6 py-8">
 
     <!-- 标签导航 -->
-    <div class="flex gap-2 mb-8">
+    <div class="flex gap-2 mb-8 flex-wrap">
         <button onclick="switchTab('rewrite')" id="tab-rewrite" class="tab-btn tab-active px-5 py-2.5 rounded-xl font-medium text-sm transition-all">📝 笔记改写</button>
         <button onclick="switchTab('batch')" id="tab-batch" class="tab-btn px-5 py-2.5 rounded-xl font-medium text-sm text-gray-500 hover:text-gray-700 transition-all">🔍 批量采集</button>
+        <button onclick="switchTab('monitor')" id="tab-monitor" class="tab-btn px-5 py-2.5 rounded-xl font-medium text-sm text-gray-500 hover:text-gray-700 transition-all">📡 关键词监控</button>
+        <button onclick="switchTab('kol')" id="tab-kol" class="tab-btn px-5 py-2.5 rounded-xl font-medium text-sm text-gray-500 hover:text-gray-700 transition-all">👤 KOL筛选</button>
+        <button onclick="switchTab('batchuser')" id="tab-batchuser" class="tab-btn px-5 py-2.5 rounded-xl font-medium text-sm text-gray-500 hover:text-gray-700 transition-all">📦 批量用户</button>
         <button onclick="switchTab('history')" id="tab-history" class="tab-btn px-5 py-2.5 rounded-xl font-medium text-sm text-gray-500 hover:text-gray-700 transition-all">📊 历史记录</button>
     </div>
 
@@ -268,11 +272,199 @@
         </div>
     </div>
 
+    <!-- ═══ 关键词监控页 ═══ -->
+    <div id="page-monitor" class="tab-page hidden fade-in">
+        <div class="card p-6 mb-6">
+            <h2 class="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">📡 关键词监控 + AI 情报分析</h2>
+            <div class="grid grid-cols-4 gap-4 mb-5">
+                <div class="col-span-2">
+                    <label class="block text-sm font-medium text-gray-500 mb-2">监控关键词</label>
+                    <input type="text" id="monitorKeyword" placeholder="输入要监控的关键词，如 防晒霜">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">检查间隔(分)</label>
+                    <input type="number" id="monitorInterval" value="60" min="5" max="1440">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">排序方式</label>
+                    <select id="monitorSort">
+                        <option value="0">综合排序</option>
+                        <option value="1">最新</option>
+                        <option value="2">最多点赞</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="addMonitorKeyword()" id="btnAddMonitor" class="btn-primary flex items-center gap-2 flex-1 justify-center">➕ 添加监控</button>
+                <button onclick="checkAllMonitors()" id="btnCheckMonitor" class="btn-secondary flex items-center gap-2 flex-1 justify-center">🔄 立即检查</button>
+                <button onclick="analyzeMonitor()" id="btnAnalyzeMonitor" class="btn-secondary flex items-center gap-2 flex-1 justify-center" style="background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff">🤖 AI 情报分析</button>
+            </div>
+        </div>
+
+        <!-- 监控列表 -->
+        <div class="card p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-semibold text-gray-700">📋 监控关键词列表</h3>
+                <button onclick="loadMonitorKeywords()" class="text-sm px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600">🔄 刷新</button>
+            </div>
+            <div id="monitorKeywordList" class="space-y-2">
+                <p class="text-gray-400 text-sm">加载中...</p>
+            </div>
+        </div>
+
+        <!-- 监控结果 -->
+        <div class="card p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-semibold text-gray-700">📊 监控结果 <span id="monitorResultCount" class="text-sm text-gray-400"></span></h3>
+                <div class="flex gap-2">
+                    <select id="monitorResultFilter" onchange="loadMonitorResults()" class="text-xs py-1 px-2" style="width:auto">
+                        <option value="">全部关键词</option>
+                    </select>
+                    <button onclick="clearMonitorResults()" class="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-50">🗑️ 清空</button>
+                </div>
+            </div>
+            <div id="monitorResultList" class="space-y-2">
+                <p class="text-gray-400 text-sm">暂无监控结果</p>
+            </div>
+        </div>
+
+        <!-- AI 分析结果 -->
+        <div id="monitorAnalysis" class="card p-6 hidden">
+            <h3 class="font-semibold text-gray-700 mb-4">🤖 AI 情报分析报告</h3>
+            <div id="monitorAnalysisContent" class="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap bg-gray-50 rounded-xl p-5"></div>
+        </div>
+    </div>
+
+    <!-- ═══ KOL 筛选页 ═══ -->
+    <div id="page-kol" class="tab-page hidden fade-in">
+        <div class="card p-6 mb-6">
+            <h2 class="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">👤 KOL 筛选 + 智能匹配</h2>
+            <div class="grid grid-cols-4 gap-4 mb-5">
+                <div class="col-span-2">
+                    <label class="block text-sm font-medium text-gray-500 mb-2">搜索关键词</label>
+                    <input type="text" id="kolKeyword" placeholder="输入领域关键词，如 美妆、穿搭、美食">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">数量</label>
+                    <input type="number" id="kolCount" value="20" min="1" max="100">
+                </div>
+                <div class="flex items-end">
+                    <button onclick="searchKOL()" id="btnKolSearch" class="btn-primary w-full">🔍 搜索 KOL</button>
+                </div>
+            </div>
+            <!-- 筛选条件 -->
+            <div class="grid grid-cols-4 gap-3 mb-4 bg-gray-50 rounded-xl p-4">
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">最小粉丝</label>
+                    <input type="number" id="kolMinFans" value="0" min="0" class="text-xs">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">最大粉丝</label>
+                    <input type="number" id="kolMaxFans" value="999999999" min="0" class="text-xs">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">最低互动率(%)</label>
+                    <input type="number" id="kolMinEngagement" value="0" min="0" step="0.1" class="text-xs">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">最低评分</label>
+                    <input type="number" id="kolMinScore" value="0" min="0" max="100" step="1" class="text-xs">
+                </div>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="filterKOL()" class="btn-secondary flex-1">🎯 应用筛选</button>
+                <button onclick="exportKOL()" class="btn-secondary flex-1">📥 导出列表</button>
+            </div>
+        </div>
+
+        <!-- KOL 列表 -->
+        <div class="card p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-semibold text-gray-700">📋 KOL 列表 <span id="kolCountLabel" class="text-sm text-gray-400"></span></h3>
+                <div class="flex gap-2 items-center">
+                    <span class="text-xs text-gray-400">排序:</span>
+                    <select id="kolSortBy" onchange="sortKOL()" class="text-xs py-1 px-2" style="width:auto">
+                        <option value="score">综合评分</option>
+                        <option value="fans">粉丝数</option>
+                        <option value="engagement_rate">互动率</option>
+                    </select>
+                </div>
+            </div>
+            <div id="kolList" class="space-y-3">
+                <p class="text-gray-400 text-sm">输入关键词搜索 KOL</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ 批量用户主页采集页 ═══ -->
+    <div id="page-batchuser" class="tab-page hidden fade-in">
+        <div class="card p-6 mb-6">
+            <h2 class="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">📦 批量用户主页采集</h2>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-500 mb-2">用户主页链接（每行一个）</label>
+                <textarea id="batchUserUrls" rows="4" placeholder="https://www.xiaohongshu.com/user/profile/xxxxx&#10;https://www.xiaohongshu.com/user/profile/yyyyy" class="w-full text-sm"></textarea>
+            </div>
+            <div class="grid grid-cols-3 gap-4 mb-5">
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">每用户最大笔记数</label>
+                    <input type="number" id="batchUserMaxNotes" value="50" min="1" max="500">
+                </div>
+                <div class="col-span-2 flex items-end">
+                    <button onclick="startBatchUserCollect()" id="btnBatchUser" class="btn-primary flex-1">🚀 开始批量采集</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 采集进度 -->
+        <div id="batchUserProgress" class="card p-6 mb-6 hidden">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-semibold text-gray-700" id="batchUserProgressTitle">采集中...</h3>
+                <span class="text-sm text-gray-400" id="batchUserProgressDetail"></span>
+            </div>
+            <div class="progress-bar mb-3">
+                <div id="batchUserProgressBar" class="progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- 采集结果 -->
+        <div id="batchUserResults" class="hidden">
+            <div class="grid grid-cols-3 gap-4 mb-6">
+                <div class="card p-4 text-center">
+                    <p class="text-xs text-gray-400 mb-1">采集用户</p>
+                    <p id="batchUserStatUsers" class="stat-number text-2xl">0</p>
+                </div>
+                <div class="card p-4 text-center">
+                    <p class="text-xs text-gray-400 mb-1">采集笔记</p>
+                    <p id="batchUserStatNotes" class="stat-number text-2xl">0</p>
+                </div>
+                <div class="card p-4 text-center">
+                    <p class="text-xs text-gray-400 mb-1">批量下载</p>
+                    <button onclick="downloadBatchUserImages()" class="btn-primary text-sm px-4 py-2 mt-1">📥 下载全部图片</button>
+                </div>
+            </div>
+            <div class="card p-6">
+                <h3 class="font-semibold text-gray-700 mb-4">📋 采集结果</h3>
+                <div id="batchUserResultList" class="space-y-4"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- 历史记录页 -->
     <div id="page-history" class="tab-page hidden fade-in">
         <div class="card p-6">
-            <h2 class="text-lg font-bold text-gray-900 mb-5">📊 改写历史</h2>
-            <p class="text-gray-400 text-sm">历史记录功能开发中...</p>
+            <div class="flex justify-between items-center mb-5">
+                <h2 class="text-lg font-bold text-gray-900">📊 改写历史</h2>
+                <div class="flex gap-2">
+                    <button onclick="loadHistory()" class="text-sm px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600">🔄 刷新</button>
+                    <button onclick="clearHistory()" class="text-sm px-3 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600">🗑️ 清空</button>
+                </div>
+            </div>
+            <div id="historyList" class="space-y-3">
+                <p class="text-gray-400 text-sm">加载中...</p>
+            </div>
+            <div id="historyEmpty" class="hidden text-center py-8">
+                <p class="text-gray-400 text-sm">暂无历史记录</p>
+            </div>
         </div>
     </div>
 </div>
@@ -287,44 +479,81 @@
         </div>
 
         <div class="space-y-6">
-            <!-- Cookie -->
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">🍪 小红书 Cookie</label>
-                
-                <!-- 扫码登录区 -->
-                <div id="qrLoginArea" class="mb-4">
-                    <button onclick="startQRLogin()" id="btnQRLogin" class="btn-primary w-full mb-3 flex items-center justify-center gap-2">
-                        📱 扫码登录自动获取 Cookie
-                    </button>
-                    <div id="qrContainer" class="hidden text-center">
-                        <div id="qrCodeDisplay" class="inline-block p-4 bg-white border-2 border-gray-200 rounded-2xl mb-3"></div>
-                        <p id="qrStatus" class="text-sm text-gray-500">请使用小红书 APP 扫描二维码</p>
-                        <p id="qrHint" class="text-xs text-gray-400 mt-1">扫码后请在手机上确认登录</p>
+
+            <!-- Chrome 插件 Cookie 采集 -->
+            <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <span class="text-lg">🧩</span>
+                    <div>
+                        <span class="text-sm font-bold text-blue-800">Chrome 插件采集（推荐）</span>
+                        <p class="text-xs text-blue-600">安装插件后，一键从浏览器采集 Cookie</p>
                     </div>
                 </div>
-
-                <div class="flex items-center gap-3 my-3">
-                    <div class="flex-1 h-px bg-gray-200"></div>
-                    <span class="text-xs text-gray-400">或手动粘贴</span>
-                    <div class="flex-1 h-px bg-gray-200"></div>
+                <div class="flex items-start gap-3 mb-3">
+                    <span class="w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">1</span>
+                    <div class="flex-1">
+                        <p class="text-sm text-gray-700 font-medium">安装 Chrome 插件</p>
+                        <ol class="text-xs text-gray-500 mt-1 space-y-1 list-decimal ml-4">
+                            <li>打开 Chrome，地址栏输入 <code class="bg-gray-100 px-1 rounded text-[11px]">chrome://extensions</code></li>
+                            <li>右上角打开「开发者模式」</li>
+                            <li>点击「加载已解压的扩展程序」</li>
+                            <li>选择 <code class="bg-gray-100 px-1 rounded text-[11px]">chrome_extension</code> 文件夹</li>
+                        </ol>
+                        <p class="text-xs text-gray-400 mt-1">💡 插件在项目目录的 <code>chrome_extension/</code> 文件夹中</p>
+                        <a href="/api/plugin/download" target="_blank" class="inline-block mt-2 text-xs bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600 transition-colors">📥 下载插件 zip</a>
+                    </div>
                 </div>
+                <div class="flex items-start gap-3 mb-3">
+                    <span class="w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">2</span>
+                    <div class="flex-1">
+                        <p class="text-sm text-gray-700 font-medium">登录小红书 & 检测</p>
+                        <div class="flex items-center gap-2 mt-1">
+                            <button onclick="detectExtension()" class="btn-secondary text-xs px-3 py-1.5">🔍 检测插件状态</button>
+                            <span id="extDetectResult" class="text-xs text-gray-400"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-3">
+                    <span class="w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
+                    <div class="flex-1">
+                        <p class="text-sm text-gray-700 font-medium">一键采集 Cookie</p>
+                        <p class="text-xs text-gray-500 mt-1 mb-2">打开 <a href="https://www.xiaohongshu.com" target="_blank" class="text-blue-500 underline">xiaohongshu.com</a> 并登录，然后点击插件图标采集</p>
+                        <button onclick="collectFromExtension()" class="btn-primary text-xs px-4 py-2" style="display:inline-flex;align-items:center;gap:6px">
+                            🍪 通过插件采集
+                        </button>
+                    </div>
+                </div>
+            </div>
 
-                <textarea id="settingCookies" rows="3" placeholder="从浏览器 F12 → Network → 复制 Cookie..." class="w-full text-xs"></textarea>
+            <div class="flex items-center gap-3">
+                <div class="flex-1 h-px bg-gray-200"></div>
+                <span class="text-xs text-gray-400">或手动粘贴</span>
+                <div class="flex-1 h-px bg-gray-200"></div>
+            </div>
+
+            <!-- 手动粘贴 Cookie -->
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">🍪 手动粘贴 Cookie</label>
+                <textarea id="settingCookies" rows="3" placeholder="粘贴 Cookie 字符串（key1=value1; key2=value2; ...）" class="w-full text-xs"></textarea>
                 <div class="flex gap-2 mt-2">
                     <button onclick="testCookie()" class="btn-secondary text-sm flex-1">🔍 测试有效性</button>
-                    <button onclick="saveSettings()" class="btn-secondary text-sm flex-1">💾 保存</button>
+                    <button onclick="saveCookies()" class="btn-secondary text-sm flex-1">💾 保存</button>
                 </div>
                 <div id="cookieTestResult" class="mt-2 text-sm hidden"></div>
             </div>
 
-            <!-- Cookie 池 -->
-            <div>
-                <div class="flex items-center justify-between mb-2">
-                    <label class="block text-sm font-semibold text-gray-700">🍪 Cookie 池管理</label>
-                    <button onclick="refreshCookiePool()" id="btnRefreshPool" class="text-xs text-xhs hover:text-xhs_light">🔄 刷新</button>
+            <!-- Cookie 池管理增强 -->
+            <div class="border border-gray-200 rounded-xl p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <label class="text-sm font-semibold text-gray-700">🍪 Cookie 池管理</label>
+                    <div class="flex gap-1">
+                        <button onclick="refreshCookiePool()" class="text-xs text-xhs hover:text-xhs_light px-2 py-1 rounded-lg hover:bg-red-50">🔄 刷新</button>
+                        <button onclick="openAddCookieModal()" class="text-xs text-blue-500 hover:text-blue-700 px-2 py-1 rounded-lg hover:bg-blue-50">➕ 添加</button>
+                    </div>
                 </div>
                 <div id="cookiePoolInfo" class="text-xs text-gray-400 mb-2">加载中...</div>
-                <div id="cookiePoolList" class="space-y-1 mb-3 max-h-40 overflow-y-auto"></div>
+                <input type="text" id="cookieSearch" placeholder="🔍 搜索用户名 / a1..." class="text-xs mb-2" oninput="filterCookiePool()">
+                <div id="cookiePoolList" class="space-y-1 mb-3 max-h-48 overflow-y-auto"></div>
                 <div class="flex gap-2">
                     <button onclick="cookiePoolValidate()" class="btn-secondary text-xs flex-1">🔍 验证全部</button>
                     <button onclick="cookiePoolAutoUpdate()" class="btn-secondary text-xs flex-1">🧹 清理失效</button>
@@ -332,7 +561,7 @@
                 </div>
             </div>
 
-            <!-- AI 模型 -->
+            <!-- AI 模型配置 -->
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-2">🤖 AI 模型配置</label>
                 <div class="space-y-3">
@@ -361,6 +590,54 @@
     </div>
 </div>
 
+<!-- 模型快捷切换弹窗 -->
+<div id="modelSwitchModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" onclick="closeModelSwitch()"></div>
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[380px] bg-white rounded-2xl shadow-2xl p-6">
+        <div class="flex justify-between items-center mb-5">
+            <h3 class="text-lg font-bold text-gray-900">🤖 切换 AI 模型</h3>
+            <button onclick="closeModelSwitch()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+        </div>
+        <div id="modelSwitchList" class="space-y-2 mb-5">
+            <p class="text-sm text-gray-400 text-center py-4">加载中...</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <input type="text" id="modelSwitchCustom" placeholder="或手动输入模型名" class="flex-1 text-sm">
+            <button onclick="switchModel()" class="btn-primary text-sm px-4 py-2">切换</button>
+        </div>
+        <p class="text-xs text-gray-400 mt-3 text-center">当前模型: <span id="modelSwitchCurrent" class="font-medium text-gray-600">-</span></p>
+    </div>
+</div>
+
+<!-- Cookie 详情弹窗 -->
+<div id="cookieDetailModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" onclick="closeCookieDetail()"></div>
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[360px] bg-white rounded-2xl shadow-2xl p-6">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold text-gray-900">🍪 Cookie 详情</h3>
+            <button onclick="closeCookieDetail()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+        </div>
+        <div id="cookieDetailContent" class="space-y-3 text-sm"></div>
+    </div>
+</div>
+
+<!-- 添加 Cookie 弹窗 -->
+<div id="addCookieModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" onclick="closeAddCookieModal()"></div>
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[420px] bg-white rounded-2xl shadow-2xl p-6">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold text-gray-900">➕ 添加 Cookie</h3>
+            <button onclick="closeAddCookieModal()" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+        </div>
+        <input type="text" id="addCookieUsername" placeholder="用户名 (可选)" class="text-sm mb-3">
+        <textarea id="addCookieContent" rows="4" placeholder="粘贴 Cookie 字符串（key1=value1; key2=value2; ...）" class="text-xs w-full mb-3"></textarea>
+        <div class="flex gap-2">
+            <button onclick="addCookieToPool()" class="btn-primary text-sm flex-1">✅ 添加到池</button>
+            <button onclick="closeAddCookieModal()" class="btn-secondary text-sm">取消</button>
+        </div>
+    </div>
+</div>
+
 <!-- 实时日志浮窗 -->
 <div id="logPanel" class="fixed bottom-6 right-6 w-80 card p-4 hidden z-40">
     <div class="flex justify-between items-center mb-3">
@@ -379,6 +656,8 @@ let searchResults = [];
 window.addEventListener('load', () => {
     loadConfig();
     loadStats();
+    loadMonitorKeywords();
+    loadMonitorResults();
 });
 
 function loadConfig() {
@@ -386,7 +665,11 @@ function loadConfig() {
         .then(r => r.json())
         .then(data => {
             updateStatus('cookieStatus', data.cookies_configured, 'Cookie', data.cookies_configured ? '已连接' : '未配置');
-            updateStatus('llmStatus', data.llm_configured, 'AI 模型', data.llm_configured ? data.llm_model : '未配置');
+            const modelDisplay = data.llm_configured ? data.llm_model : '未配置';
+            const nameEl = document.getElementById('llmModelName');
+            if (nameEl) nameEl.textContent = modelDisplay;
+            updateStatus('llmStatus', data.llm_configured, 'AI 模型', modelDisplay);
+            window._currentConfig = data;
         });
 }
 
@@ -399,6 +682,61 @@ function loadStats() {
             document.getElementById('stat-total-collect').textContent = data.total_processed || 0;
             document.getElementById('stat-total-rewrite').textContent = data.total_rewritten || 0;
         });
+}
+
+// ── 历史记录 ──
+function loadHistory() {
+    fetch('/api/history')
+        .then(r => r.json())
+        .then(data => {
+            const list = document.getElementById('historyList');
+            const empty = document.getElementById('historyEmpty');
+            if (!data.data || !data.data.length) {
+                list.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+            empty.classList.add('hidden');
+            list.innerHTML = data.data.map((h, i) => `
+                <div class="border border-gray-100 rounded-xl p-4 hover:shadow-sm transition-all cursor-pointer"
+                     onclick="showHistoryDetail(${i})">
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="text-sm font-semibold text-gray-900 truncate max-w-[70%]">${h.title || '(无标题)'}</span>
+                        <span class="text-xs text-gray-400">${h.created_at || ''}</span>
+                    </div>
+                    <p class="text-xs text-gray-500 line-clamp-2">${h.desc || ''}</p>
+                    <div class="flex gap-2 mt-2">
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">${h.style || '默认'}</span>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-600">${h.model || 'AI'}</span>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-600">🖼️ ${h.images_count || 0}</span>
+                    </div>
+                </div>
+            `).join('');
+        });
+}
+
+let historyData = [];
+function showHistoryDetail(index) {
+    fetch('/api/history')
+        .then(r => r.json())
+        .then(data => {
+            const h = data.data[index];
+            if (!h) return;
+            switchTab('rewrite');
+            document.getElementById('noteUrl').value = h.url || '';
+            document.getElementById('originalTitle').textContent = h.title || '';
+            document.getElementById('originalDesc').textContent = h.desc || '';
+            document.getElementById('rewrittenTitle').textContent = h.rewritten_title || '';
+            document.getElementById('rewrittenDesc').textContent = h.rewritten_desc || '';
+            document.getElementById('resultArea').classList.remove('hidden');
+        });
+}
+
+function clearHistory() {
+    if (!confirm('确认清空所有历史记录？')) return;
+    fetch('/api/history', { method: 'DELETE' })
+        .then(r => r.json())
+        .then(() => { loadHistory(); showToast('历史记录已清空'); });
 }
 
 function updateStatus(id, ok, label, detail) {
@@ -423,6 +761,15 @@ function switchTab(name) {
 // ── 设置 ──
 function openSettings() {
     document.getElementById('settingsModal').classList.remove('hidden');
+    // 回填当前配置到表单（让每次打开都能看到已保存的值）
+    fetch('/api/config').then(r => r.json()).then(data => {
+        document.getElementById('settingCookies').value = data.cookies || '';
+        document.getElementById('settingProvider').value = data.llm_provider || 'deepseek';
+        document.getElementById('settingApiKey').value = data.llm_api_key || '';
+        document.getElementById('settingModel').value = data.llm_model || '';
+        document.getElementById('settingBaseUrl').value = data.llm_base_url || '';
+        onProviderChange();
+    });
     refreshCookiePool();
 }
 function closeSettings() { document.getElementById('settingsModal').classList.add('hidden'); }
@@ -604,6 +951,7 @@ function saveSettings() {
         if (data.success) {
             closeSettings();
             loadConfig();
+            document.getElementById('llmModelName').textContent = config.llm_model || 'AI 模型';
             showToast('✅ 设置已保存');
         } else {
             showToast('❌ 保存失败: ' + (data.message || '未知错误'), 'error');
@@ -644,7 +992,7 @@ socket.on('task_progress', data => {
 });
 
 socket.on('task_complete', data => {
-    updateProgress(100, '✅ 全部完成！');
+    updateProgress(100, '✅ 处理完成！');
     addLog('✅ 处理完成！');
 
     const result = data.data;
@@ -671,6 +1019,16 @@ socket.on('task_complete', data => {
     const btn = document.getElementById('btnStart');
     btn.disabled = false;
     btn.innerHTML = '🚀 开始处理';
+
+    // 批量队列：继续处理下一篇
+    if (window._batchQueue && window._batchIndex < window._batchQueue.length) {
+        window._batchIndex++;
+        addLog(`📌 继续下一篇 (${window._batchIndex + 1}/${window._batchQueue.length})`);
+        setTimeout(() => processNextBatchNote(), 2000);
+    } else if (window._batchQueue) {
+        showToast('🎉 批量处理全部完成！');
+        window._batchQueue = null;
+    }
 });
 
 socket.on('task_error', data => {
@@ -681,6 +1039,12 @@ socket.on('task_error', data => {
     const btn = document.getElementById('btnStart');
     btn.disabled = false;
     btn.innerHTML = '🚀 开始处理';
+
+    // 批量队列中出错也跳到下一个
+    if (window._batchQueue) {
+        window._batchIndex++;
+        setTimeout(() => processNextBatchNote(), 1500);
+    }
 });
 
 function updateProgress(percent, text) {
@@ -694,10 +1058,11 @@ function renderImages() {
     grid.innerHTML = '';
     currentImages.original.forEach((url, i) => {
         const processed = currentImages.processed[i];
+        const displayUrl = processed || url;
         const div = document.createElement('div');
         div.className = 'img-card border border-gray-100';
         div.innerHTML = `
-            <img src="${processed || url}" alt="图片 ${i+1}" loading="lazy">
+            <img src="${displayUrl}" alt="图片 ${i+1}" loading="lazy">
             <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs py-1 px-2 text-center">
                 ${processed ? '✅ 已处理' : '原图'} #${i+1}
             </div>
@@ -775,16 +1140,31 @@ function batchSearch() {
 function renderSearchResults() {
     const list = document.getElementById('searchResultsList');
     list.innerHTML = '';
+    if (!searchResults.length) {
+        list.innerHTML = '<div class="text-center text-gray-400 py-8">未找到相关笔记</div>';
+        return;
+    }
     searchResults.forEach((note, i) => {
         const div = document.createElement('div');
         div.className = 'flex items-center gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors';
+        const coverHtml = note.cover
+            ? `<img src="${note.cover}" class="w-16 h-16 rounded-lg object-cover flex-shrink-0" loading="lazy" onerror="this.style.display='none'">`
+            : `<div class="w-16 h-16 rounded-lg bg-gray-200 flex-shrink-0 flex items-center justify-center text-gray-400 text-2xl">📝</div>`;
+        const typeBadge = note.type === 'video'
+            ? '<span class="text-xs px-1.5 py-0.5 rounded bg-red-50 text-red-500">视频</span>'
+            : '<span class="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-500">图文</span>';
         div.innerHTML = `
-            <input type="checkbox" class="note-check w-4 h-4 accent-xhs" data-index="${i}" checked>
+            <input type="checkbox" class="note-check w-4 h-4 accent-xhs flex-shrink-0" data-index="${i}" checked>
+            ${coverHtml}
             <div class="flex-1 min-w-0">
-                <h4 class="font-medium text-gray-900 truncate">${note.title || '无标题'}</h4>
-                <p class="text-sm text-gray-400">by ${note.author || '未知'} · 👍 ${note.likes || 0}</p>
+                <div class="flex items-center gap-2 mb-1">
+                    ${typeBadge}
+                    <h4 class="font-medium text-gray-900 truncate">${note.title}</h4>
+                </div>
+                <p class="text-xs text-gray-400">by ${note.author} · 👍 ${note.likes}</p>
+                ${note.desc ? `<p class="text-xs text-gray-400 mt-0.5 line-clamp-1">${note.desc}</p>` : ''}
             </div>
-            <button onclick="collectSingleNote('${note.id}', '${note.xsec_token}')" class="btn-secondary text-sm">采集改写</button>
+            <button onclick="collectSingleNote('${note.id}', '${note.xsec_token}')" class="btn-secondary text-sm flex-shrink-0">采集改写</button>
         `;
         list.appendChild(div);
     });
@@ -798,13 +1178,26 @@ function batchRewriteSelected() {
         const n = searchResults[i];
         return `https://www.xiaohongshu.com/explore/${n.id}?xsec_token=${n.xsec_token}`;
     });
-    // 用第一个开始，后续可扩展为队列
     if (urls.length) {
-        document.getElementById('noteUrl').value = urls[0];
-        switchTab('rewrite');
-        startFullProcess();
-        showToast(`已选 ${urls.length} 篇，开始处理第 1 篇`);
+        // 启动批量队列处理
+        window._batchQueue = urls;
+        window._batchIndex = 0;
+        showToast(`共 ${urls.length} 篇笔记，开始批量处理`);
+        processNextBatchNote();
     }
+}
+
+function processNextBatchNote() {
+    if (!window._batchQueue || window._batchIndex >= window._batchQueue.length) {
+        showToast('🎉 批量处理完成！');
+        window._batchQueue = null;
+        return;
+    }
+    const url = window._batchQueue[window._batchIndex];
+    document.getElementById('noteUrl').value = url;
+    switchTab('rewrite');
+    startFullProcess();
+    showToast(`处理中 ${window._batchIndex + 1}/${window._batchQueue.length}`);
 }
 
 function collectSingleNote(noteId, xsecToken) {
@@ -908,6 +1301,106 @@ function startQRPolling() {
     }, 2000); // 每2秒检查一次
 }
 
+// ── 验证码登录 ──
+let phoneSessionId = null;
+let phoneCodeTimer = null;
+let phoneCodeCountdown = 60;
+
+function sendPhoneCode() {
+    const phone = document.getElementById('phoneInput').value.trim();
+    if (!phone || phone.length !== 11 || !/^1\d{10}$/.test(phone)) {
+        showToast('请输入正确的手机号', 'error');
+        return;
+    }
+    const btn = document.getElementById('btnSendCode');
+    btn.disabled = true;
+    btn.textContent = '发送中...';
+
+    fetch('/api/login/phone/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phone })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            phoneSessionId = data.session_id;
+            showToast('验证码已发送');
+            startPhoneCodeCountdown();
+        } else {
+            showToast(data.message || '发送失败', 'error');
+            btn.disabled = false;
+            btn.textContent = '获取验证码';
+        }
+    })
+    .catch(err => {
+        showToast('网络错误: ' + (err.message || ''), 'error');
+        btn.disabled = false;
+        btn.textContent = '获取验证码';
+    });
+}
+
+function startPhoneCodeCountdown() {
+    const btn = document.getElementById('btnSendCode');
+    phoneCodeCountdown = 60;
+    btn.textContent = phoneCodeCountdown + 's';
+    phoneCodeTimer = setInterval(() => {
+        phoneCodeCountdown--;
+        if (phoneCodeCountdown <= 0) {
+            clearInterval(phoneCodeTimer);
+            btn.disabled = false;
+            btn.textContent = '获取验证码';
+        } else {
+            btn.textContent = phoneCodeCountdown + 's';
+        }
+    }, 1000);
+}
+
+function verifyPhoneCode() {
+    const code = document.getElementById('codeInput').value.trim();
+    if (!code || code.length !== 6) {
+        showToast('请输入6位验证码', 'error');
+        return;
+    }
+    if (!phoneSessionId) {
+        showToast('请先获取验证码', 'error');
+        return;
+    }
+    const btn = document.getElementById('btnVerifyCode');
+    btn.disabled = true;
+    btn.textContent = '登录中...';
+
+    fetch('/api/login/phone/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: phoneSessionId, code: code })
+    })
+    .then(r => r.json())
+    .then(data => {
+        btn.disabled = false;
+        btn.textContent = '登录';
+        if (data.success) {
+            document.getElementById('settingCookies').value = data.cookies || '';
+            saveSettings();
+            loadConfig();
+            showToast('🎉 ' + data.message);
+            document.getElementById('phoneLoginStatus').textContent = '✅ ' + data.message;
+            document.getElementById('phoneLoginStatus').className = 'text-xs text-green-600';
+            document.getElementById('phoneLoginStatus').classList.remove('hidden');
+        } else {
+            showToast(data.message || '登录失败', 'error');
+            document.getElementById('phoneLoginStatus').textContent = '❌ ' + (data.message || '登录失败');
+            document.getElementById('phoneLoginStatus').className = 'text-xs text-red-500';
+            document.getElementById('phoneLoginStatus').classList.remove('hidden');
+        }
+    })
+    .catch(err => {
+        btn.disabled = false;
+        btn.textContent = '登录';
+        showToast('网络错误: ' + (err.message || ''), 'error');
+    });
+}
+
 // ── 工具函数 ──
 function resetForm() {
     document.getElementById('noteUrl').value = '';
@@ -956,37 +1449,64 @@ function showToast(msg, type = 'success') {
 }
 
 // ── Cookie 池管理 ──
-function refreshCookiePool() {
-    const btn = document.getElementById('btnRefreshPool');
-    if (btn) btn.textContent = '⏳ 加载中...';
+let _allPoolCookies = [];  // 保存所有cookie数据供搜索
 
+function refreshCookiePool() {
     fetch('/api/cookie/pool')
     .then(r => r.json())
     .then(data => {
         if (!data.success) return;
         const pool = data.data;
+        _allPoolCookies = pool.cookies;
         document.getElementById('cookiePoolInfo').textContent =
             `共 ${pool.total} 条 | ✅ ${pool.valid} 有效 | ❌ ${pool.invalid} 失效`;
+        renderCookiePoolList(pool.cookies);
+    });
+}
 
-        const list = document.getElementById('cookiePoolList');
-        list.innerHTML = '';
-        pool.cookies.forEach(c => {
-            const div = document.createElement('div');
-            div.className = 'flex items-center gap-2 p-2 bg-gray-50 rounded-lg text-xs';
-            div.innerHTML = `
-                <span class="w-2 h-2 rounded-full flex-shrink-0 ${c.is_valid ? 'bg-green-500' : 'bg-red-400'}"></span>
-                <span class="flex-1 truncate">${c.username}</span>
-                <span class="text-gray-400">${c.fetch_date ? c.fetch_date.split(' ')[0] : ''}</span>
-                <button onclick="cookiePoolRemove(${c.index})" class="text-red-400 hover:text-red-600 px-1">✕</button>
-            `;
-            list.appendChild(div);
-        });
+function renderCookiePoolList(cookies) {
+    const list = document.getElementById('cookiePoolList');
+    list.innerHTML = '';
+    cookies.forEach(c => {
+        const div = document.createElement('div');
+        div.className = 'flex items-center gap-2 p-2 bg-gray-50 rounded-lg text-xs cursor-pointer hover:bg-gray-100 transition-colors';
+        div.onclick = (e) => { if (e.target.tagName !== 'BUTTON') showCookieDetail(c.index); };
+        div.innerHTML = `
+            <span class="w-2 h-2 rounded-full flex-shrink-0 ${c.is_valid ? 'bg-green-500' : 'bg-red-400'}"></span>
+            <span class="flex-1 truncate font-medium">${c.username}</span>
+            <span class="text-gray-400 text-[11px]">${c.fetch_date ? c.fetch_date.split(' ')[0] : ''}</span>
+            <button onclick="event.stopPropagation();cookiePoolUseOne(${c.index})" class="text-blue-400 hover:text-blue-600 px-1" title="使用此Cookie">⚡</button>
+            <button onclick="event.stopPropagation();cookiePoolRemove(${c.index})" class="text-red-400 hover:text-red-600 px-1" title="移除">✕</button>
+        `;
+        list.appendChild(div);
+    });
+    if (!cookies.length) {
+        list.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">暂无 Cookie</p>';
+    }
+}
 
-        if (!pool.cookies.length) {
-            list.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">暂无 Cookie，扫码登录获取第一个</p>';
-        }
+function filterCookiePool() {
+    const q = document.getElementById('cookieSearch').value.toLowerCase();
+    if (!_allPoolCookies.length) return;
+    if (!q) { renderCookiePoolList(_allPoolCookies); return; }
+    const filtered = _allPoolCookies.filter(c =>
+        (c.username || '').toLowerCase().includes(q) ||
+        String(c.index).includes(q)
+    );
+    renderCookiePoolList(filtered);
+}
+
+function cookiePoolUseOne(index) {
+    fetch('/api/cookie/pool/use-best', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ index })
     })
-    .finally(() => { if (btn) btn.textContent = '🔄 刷新'; });
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) { showToast('✅ 已应用'); refreshCookiePool(); }
+        else showToast(data.message, 'error');
+    });
 }
 
 function cookiePoolValidate() {
@@ -1048,6 +1568,574 @@ function cookiePoolRemove(index) {
         refreshCookiePool();
     });
 }
+
+function showCookieDetail(index) {
+    fetch(`/api/cookie/pool/detail?index=${index}`)
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success) { showToast(data.message, 'error'); return; }
+        const d = data.data;
+        document.getElementById('cookieDetailContent').innerHTML = `
+            <div class="flex justify-between"><span class="text-gray-400">用户名</span><span class="font-medium">${d.username}</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">状态</span><span class="${d.is_valid ? 'text-green-600' : 'text-red-500'}">${d.is_valid ? '✅ 有效' : '❌ 失效'}</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">a1</span><span class="font-mono text-xs">${d.a1}</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">web_session</span><span>${d.web_session}</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">采集时间</span><span class="text-xs">${d.fetch_date}</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">上次验证</span><span class="text-xs">${d.last_check}</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">Cookie 字段</span><span class="text-xs text-gray-500">${d.cookie_keys.join(', ')}</span></div>
+        `;
+        document.getElementById('cookieDetailModal').classList.remove('hidden');
+    });
+}
+function closeCookieDetail() { document.getElementById('cookieDetailModal').classList.add('hidden'); }
+
+function openAddCookieModal() {
+    document.getElementById('addCookieUsername').value = '';
+    document.getElementById('addCookieContent').value = '';
+    document.getElementById('addCookieModal').classList.remove('hidden');
+}
+function closeAddCookieModal() { document.getElementById('addCookieModal').classList.add('hidden'); }
+
+function addCookieToPool() {
+    const cookies = document.getElementById('addCookieContent').value.trim();
+    if (!cookies) { showToast('请输入 Cookie', 'error'); return; }
+    const username = document.getElementById('addCookieUsername').value.trim() || '手动添加';
+    fetch('/api/cookie/pool/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ cookies, username })
+    })
+    .then(r => r.json())
+    .then(data => {
+        showToast(data.message);
+        if (data.success) { closeAddCookieModal(); refreshCookiePool(); }
+    });
+}
+
+function saveCookies() {
+    const cookies = document.getElementById('settingCookies').value.trim();
+    if (!cookies) { showToast('Cookie 为空', 'error'); return; }
+    fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ cookies })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            loadConfig();
+            showToast('✅ Cookie 已保存');
+        } else {
+            showToast('保存失败', 'error');
+        }
+    });
+}
+
+// ── 模型切换 ──
+function openModelSwitch() {
+    document.getElementById('modelSwitchModal').classList.remove('hidden');
+    document.getElementById('modelSwitchCurrent').textContent = window._currentConfig?.llm_model || '-';
+    // 加载模型列表
+    const list = document.getElementById('modelSwitchList');
+    if (allModels.length > 0) {
+        renderModelSwitchList(allModels);
+    } else {
+        // 尝试获取
+        list.innerHTML = '<p class="text-sm text-gray-400 text-center py-4">加载中...</p>';
+        if (window._currentConfig?.llm_configured) {
+            fetchModelsForSwitch();
+        } else {
+            list.innerHTML = '<p class="text-sm text-gray-400 text-center py-4">请先在设置中配置 AI 模型</p>';
+        }
+    }
+}
+function closeModelSwitch() { document.getElementById('modelSwitchModal').classList.add('hidden'); }
+
+function renderModelSwitchList(models) {
+    const list = document.getElementById('modelSwitchList');
+    const current = window._currentConfig?.llm_model || '';
+    list.innerHTML = models.map(m => `
+        <button onclick="quickSwitchModel('${m.id}')"
+            class="w-full text-left px-4 py-2.5 rounded-xl text-sm transition-all flex items-center gap-2 ${
+                m.id === current ? 'bg-gradient-to-r from-xhs to-xhs_light text-white font-medium' : 'bg-gray-50 hover:bg-gray-100 text-gray-700'
+            }">
+            ${m.id === current ? '✅' : ''} ${m.name || m.id}
+        </button>
+    `).join('');
+}
+
+function quickSwitchModel(modelId) {
+    fetch('/api/model/switch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ model: modelId })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showToast(`✅ 已切换到 ${modelId}`);
+            closeModelSwitch();
+            loadConfig();
+        } else {
+            showToast(data.message, 'error');
+        }
+    });
+}
+
+function switchModel() {
+    const custom = document.getElementById('modelSwitchCustom').value.trim();
+    if (custom) { quickSwitchModel(custom); return; }
+}
+
+function fetchModelsForSwitch() {
+    const config = window._currentConfig || {};
+    if (!config.llm_configured) return;
+    fetch('/api/models', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            provider: config.llm_provider || 'mimo',
+            api_key: document.getElementById('settingApiKey')?.value || '',
+            base_url: config.llm_base_url || '',
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.models?.length) {
+            allModels = data.models;
+            renderModelSwitchList(data.models);
+        }
+    })
+    .catch(() => {});
+}
+
+// ── Chrome 插件检测 ──
+function detectExtension() {
+    const el = document.getElementById('extDetectResult');
+    el.textContent = '⏳ 检测中...';
+    el.className = 'text-xs text-gray-400';
+    // 插件是否安装无法直接检测，只能通过发送消息尝试
+    // 这里改为引导用户手动点击插件图标
+    setTimeout(() => {
+        el.innerHTML = '💡 请确认已安装插件并打开小红书登录，然后点击插件图标';
+        el.className = 'text-xs text-blue-600';
+    }, 500);
+}
+
+function collectFromExtension() {
+    const el = document.getElementById('extDetectResult');
+    el.innerHTML = '💡 请点击浏览器工具栏上的「小红书 Cookie 采集器」插件图标，<br>输入服务端地址后点击「一键采集 Cookie」';
+    el.className = 'text-xs text-blue-600';
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 功能 1: 关键词监控
+// ══════════════════════════════════════════════════════════════════════
+let _monitorKeywords = [];
+
+function addMonitorKeyword() {
+    const kw = document.getElementById('monitorKeyword').value.trim();
+    if (!kw) { showToast('请输入关键词', 'error'); return; }
+    const btn = document.getElementById('btnAddMonitor');
+    btn.disabled = true;
+    fetch('/api/monitor/keywords', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            keyword: kw,
+            interval: parseInt(document.getElementById('monitorInterval').value) || 60,
+            sort_type: parseInt(document.getElementById('monitorSort').value) || 0,
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        showToast(data.message, data.success ? 'success' : 'error');
+        if (data.success) {
+            document.getElementById('monitorKeyword').value = '';
+            loadMonitorKeywords();
+        }
+    })
+    .finally(() => { btn.disabled = false; });
+}
+
+function loadMonitorKeywords() {
+    fetch('/api/monitor/keywords').then(r => r.json()).then(data => {
+        _monitorKeywords = data.data || [];
+        renderMonitorKeywords();
+        // 更新结果过滤下拉框
+        const filter = document.getElementById('monitorResultFilter');
+        const current = filter.value;
+        filter.innerHTML = '<option value="">全部关键词</option>';
+        _monitorKeywords.forEach(kw => {
+            filter.innerHTML += `<option value="${kw.keyword}" ${kw.keyword === current ? 'selected' : ''}>${kw.keyword}</option>`;
+        });
+    }).catch(err => console.error('loadMonitorKeywords failed:', err));
+}
+
+function renderMonitorKeywords() {
+    const list = document.getElementById('monitorKeywordList');
+    if (!_monitorKeywords.length) {
+        list.innerHTML = '<p class="text-gray-400 text-sm text-center py-4">暂无监控关键词</p>';
+        return;
+    }
+    list.innerHTML = _monitorKeywords.map(kw => `
+        <div class="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+            <span class="w-3 h-3 rounded-full flex-shrink-0 ${kw.enabled ? 'bg-green-500' : 'bg-gray-300'}"></span>
+            <div class="flex-1 min-w-0">
+                <span class="font-medium text-sm text-gray-900">${kw.keyword}</span>
+                <span class="text-xs text-gray-400 ml-2">每${kw.interval}分钟 · ${['综合','最新','点赞','评论','收藏'][kw.sort_type] || '综合'}</span>
+            </div>
+            <span class="text-xs text-gray-400">已发现 ${kw.total_found || 0} 条</span>
+            <span class="text-xs text-gray-400">${kw.last_check ? '上次: ' + kw.last_check.split(' ')[1] : '未检查'}</span>
+            <button onclick="checkOneMonitor('${kw.id}')" class="text-xs text-blue-500 hover:text-blue-700 px-2 py-1 rounded-lg hover:bg-blue-50" title="立即检查">🔄</button>
+            <button onclick="toggleMonitor('${kw.id}')" class="text-xs px-2 py-1 rounded-lg ${kw.enabled ? 'text-yellow-600 hover:bg-yellow-50' : 'text-green-600 hover:bg-green-50'}" title="${kw.enabled ? '暂停' : '启用'}">${kw.enabled ? '⏸' : '▶'}</button>
+            <button onclick="deleteMonitor('${kw.id}')" class="text-xs text-red-400 hover:text-red-600 px-2 py-1 rounded-lg hover:bg-red-50" title="删除">🗑️</button>
+        </div>
+    `).join('');
+}
+
+function checkOneMonitor(kwId) {
+    showToast('⏳ 正在检查...');
+    fetch('/api/monitor/check', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ keyword_id: kwId })
+    })
+    .then(r => r.json())
+    .then(data => {
+        showToast(data.message, data.success ? 'success' : 'error');
+        loadMonitorKeywords();
+        loadMonitorResults();
+    }).catch(err => { console.error('checkOneMonitor failed:', err); showToast('检查失败', 'error'); });
+}
+
+function checkAllMonitors() {
+    const btn = document.getElementById('btnCheckMonitor');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 检查中...';
+    showToast('⏳ 正在检查所有关键词...');
+    fetch('/api/monitor/check', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' })
+    .then(r => r.json())
+    .then(data => {
+        showToast(data.message, data.success ? 'success' : 'error');
+        loadMonitorKeywords();
+        loadMonitorResults();
+    })
+    .catch(err => { console.error('checkAllMonitors failed:', err); showToast('检查失败', 'error'); })
+    .finally(() => { btn.disabled = false; btn.innerHTML = '🔄 立即检查'; });
+}
+
+function toggleMonitor(kwId) {
+    fetch(`/api/monitor/keywords/${kwId}/toggle`, { method: 'POST' })
+    .then(r => r.json()).then(() => loadMonitorKeywords())
+    .catch(err => console.error('toggleMonitor failed:', err));
+}
+
+function deleteMonitor(kwId) {
+    if (!confirm('确定删除此监控关键词？')) return;
+    fetch(`/api/monitor/keywords/${kwId}`, { method: 'DELETE' })
+    .then(r => r.json()).then(() => { loadMonitorKeywords(); showToast('已删除'); })
+    .catch(err => { console.error('deleteMonitor failed:', err); showToast('删除失败', 'error'); });
+}
+
+function loadMonitorResults() {
+    const filter = document.getElementById('monitorResultFilter').value;
+    let url = '/api/monitor/results?limit=100';
+    if (filter) url += '&keyword=' + encodeURIComponent(filter);
+    fetch(url).then(r => r.json()).then(data => {
+        const results = data.data || [];
+        document.getElementById('monitorResultCount').textContent = `(${results.length} 条)`;
+        const list = document.getElementById('monitorResultList');
+        if (!results.length) {
+            list.innerHTML = '<p class="text-gray-400 text-sm text-center py-4">暂无监控结果</p>';
+            return;
+        }
+        // 最新的在前
+        list.innerHTML = results.reverse().map(r => `
+            <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors">
+                <div class="w-2 h-2 rounded-full mt-2 flex-shrink-0 ${r.type === 'video' ? 'bg-red-400' : 'bg-blue-400'}"></div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">${r.keyword}</span>
+                        <span class="font-medium text-sm text-gray-900 truncate">${r.title}</span>
+                    </div>
+                    <p class="text-xs text-gray-400">by ${r.author} · 👍 ${r.liked_count} · 💬 ${r.comment_count} · ⭐ ${r.collected_count}</p>
+                    <p class="text-xs text-gray-400 mt-0.5 line-clamp-1">${r.desc || ''}</p>
+                </div>
+                <span class="text-xs text-gray-300 flex-shrink-0">${(r.found_at || '').split(' ')[1] || ''}</span>
+            </div>
+        `).join('');
+    }).catch(err => console.error('loadMonitorResults failed:', err));
+}
+
+function clearMonitorResults() {
+    if (!confirm('确定清空所有监控结果？')) return;
+    fetch('/api/monitor/results', { method: 'DELETE' })
+    .then(r => r.json()).then(() => { loadMonitorResults(); showToast('已清空'); })
+    .catch(err => { console.error('clearMonitorResults failed:', err); showToast('清空失败', 'error'); });
+}
+
+function analyzeMonitor() {
+    const keyword = document.getElementById('monitorResultFilter').value;
+    const btn = document.getElementById('btnAnalyzeMonitor');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 分析中...';
+    document.getElementById('monitorAnalysis').classList.remove('hidden');
+    document.getElementById('monitorAnalysisContent').textContent = '🤖 AI 正在分析监控数据，请稍候...';
+
+    fetch('/api/monitor/analyze', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ keyword })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            document.getElementById('monitorAnalysisContent').textContent = data.data.analysis;
+        } else {
+            document.getElementById('monitorAnalysisContent').textContent = '❌ ' + data.message;
+        }
+    })
+    .catch(() => {
+        document.getElementById('monitorAnalysisContent').textContent = '❌ 网络错误';
+    })
+    .finally(() => { btn.disabled = false; btn.innerHTML = '🤖 AI 情报分析'; });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 功能 2: KOL 筛选
+// ══════════════════════════════════════════════════════════════════════
+let _allKOLs = [];
+
+function searchKOL() {
+    const keyword = document.getElementById('kolKeyword').value.trim();
+    if (!keyword) { showToast('请输入搜索关键词', 'error'); return; }
+    const btn = document.getElementById('btnKolSearch');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 搜索中...';
+
+    fetch('/api/kol/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            keyword,
+            count: parseInt(document.getElementById('kolCount').value) || 20,
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            _allKOLs = data.data;
+            renderKOLList(_allKOLs);
+            showToast(data.message);
+        } else {
+            showToast(data.message, 'error');
+        }
+    })
+    .catch(err => { console.error('searchKOL failed:', err); showToast('搜索失败: ' + err.message, 'error'); })
+    .finally(() => { btn.disabled = false; btn.innerHTML = '🔍 搜索 KOL'; });
+}
+
+function renderKOLList(kols) {
+    document.getElementById('kolCountLabel').textContent = `(${kols.length} 个)`;
+    const list = document.getElementById('kolList');
+    if (!kols.length) {
+        list.innerHTML = '<p class="text-gray-400 text-sm text-center py-4">未找到匹配的 KOL</p>';
+        return;
+    }
+    list.innerHTML = kols.map(kol => {
+        const scoreColor = kol.score >= 60 ? 'text-green-600' : kol.score >= 30 ? 'text-yellow-600' : 'text-gray-400';
+        const scoreBg = kol.score >= 60 ? 'bg-green-50' : kol.score >= 30 ? 'bg-yellow-50' : 'bg-gray-50';
+        const fansDisplay = kol.fans >= 10000 ? (kol.fans / 10000).toFixed(1) + '万' : String(kol.fans);
+        const avatarUrl = kol.image || '';
+        const avatarHtml = avatarUrl
+            ? `<img src="${avatarUrl}" class="w-12 h-12 rounded-full object-cover flex-shrink-0" onerror="this.outerHTML='<div class=\\'w-12 h-12 rounded-full bg-gradient-to-br from-xhs to-xhs_light flex items-center justify-center text-white text-lg font-bold flex-shrink-0\\'>${(kol.nickname || '?')[0]}</div>'" />`
+            : `<div class="w-12 h-12 rounded-full bg-gradient-to-br from-xhs to-xhs_light flex items-center justify-center text-white text-lg font-bold flex-shrink-0">${(kol.nickname || '?')[0]}</div>`;
+        return `
+        <div class="flex items-center gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors">
+            ${avatarHtml}
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="font-semibold text-sm text-gray-900">${kol.nickname || '未知'}</span>
+                    ${kol.is_official ? '<span class="text-xs px-1 py-0.5 rounded bg-blue-100 text-blue-600">✓ 认证</span>' : ''}
+                    ${kol.red_id ? `<span class="text-xs text-gray-400">@${kol.red_id}</span>` : ''}
+                </div>
+                <p class="text-xs text-gray-400 line-clamp-1">${kol.desc || '暂无简介'}</p>
+                <div class="flex gap-3 mt-1.5">
+                    <span class="text-xs text-gray-500">👤 ${fansDisplay} 粉丝</span>
+                    <span class="text-xs text-gray-500">📝 ${kol.note_count || 0} 笔记</span>
+                    <span class="text-xs text-gray-500">👍 ${kol.liked || 0} 赞</span>
+                    <span class="text-xs text-gray-500">💬 ${kol.comment || 0} 评</span>
+                    <span class="text-xs text-gray-500">⭐ ${kol.collected || 0} 藏</span>
+                    <span class="text-xs text-gray-500">📈 ${kol.engagement_rate}% 互动率</span>
+                </div>
+            </div>
+            <div class="flex flex-col items-center gap-1 flex-shrink-0">
+                <div class="px-3 py-1.5 rounded-xl ${scoreBg}">
+                    <span class="text-lg font-bold ${scoreColor}">${kol.score}</span>
+                    <span class="text-xs ${scoreColor}">分</span>
+                </div>
+                <button onclick="viewKOLProfile('${kol.user_id}')" class="text-xs text-blue-500 hover:text-blue-700">详情 →</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function filterKOL() {
+    const minFans = parseInt(document.getElementById('kolMinFans').value) || 0;
+    const maxFans = parseInt(document.getElementById('kolMaxFans').value) || 999999999;
+    const minEng = parseFloat(document.getElementById('kolMinEngagement').value) || 0;
+    const minScore = parseFloat(document.getElementById('kolMinScore').value) || 0;
+
+    const filtered = _allKOLs.filter(k =>
+        k.fans >= minFans && k.fans <= maxFans &&
+        k.engagement_rate >= minEng && k.score >= minScore
+    );
+    renderKOLList(filtered);
+    showToast(`筛选后 ${filtered.length} 个 KOL`);
+}
+
+function sortKOL() {
+    const sortBy = document.getElementById('kolSortBy').value;
+    const sorted = [..._allKOLs].sort((a, b) => (b[sortBy] || 0) - (a[sortBy] || 0));
+    renderKOLList(sorted);
+}
+
+function exportKOL() {
+    if (!_allKOLs.length) { showToast('没有数据可导出', 'error'); return; }
+    const header = '昵称,用户ID,粉丝数,点赞,评论,收藏,互动率,评分,简介\n';
+    const rows = _allKOLs.map(k =>
+        `"${k.nickname}","${k.user_id}",${k.fans},${k.liked || 0},${k.comment || 0},${k.collected || 0},${k.engagement_rate},${k.score},"${(k.desc || '').replace(/"/g, '""')}"`
+    ).join('\n');
+    const csv = '\uFEFF' + header + rows;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `kol_list_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    showToast('📥 已导出 CSV');
+}
+
+function viewKOLProfile(userId) {
+    showToast('⏳ 加载用户详情...');
+    fetch('/api/kol/profile', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ user_id: userId })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success) { showToast(data.message, 'error'); return; }
+        // 用 toast 显示简要信息，详细信息可用 console 查看
+        const ui = data.data.user_info;
+        const nickname = ui?.basic_info?.nickname || '未知';
+        const notesCount = (data.data.recent_notes || []).length;
+        showToast(`👤 ${nickname} · ${notesCount} 条笔记`);
+    })
+    .catch(err => { console.error('viewKOLProfile failed:', err); showToast('加载失败', 'error'); });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 功能 3: 批量用户主页采集
+// ══════════════════════════════════════════════════════════════════════
+let _batchUserData = [];
+
+function startBatchUserCollect() {
+    const urls = document.getElementById('batchUserUrls').value.trim().split('\n').map(u => u.trim()).filter(Boolean);
+    if (!urls.length) { showToast('请输入至少一个用户主页链接', 'error'); return; }
+
+    const btn = document.getElementById('btnBatchUser');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 采集中...';
+
+    document.getElementById('batchUserProgress').classList.remove('hidden');
+    document.getElementById('batchUserResults').classList.add('hidden');
+    document.getElementById('batchUserProgressBar').style.width = '10%';
+    document.getElementById('batchUserProgressTitle').textContent = `正在采集 ${urls.length} 个用户...`;
+
+    fetch('/api/user/batch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            urls,
+            max_notes: parseInt(document.getElementById('batchUserMaxNotes').value) || 50,
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById('batchUserProgressBar').style.width = '100%';
+        document.getElementById('batchUserProgressTitle').textContent = '采集完成！';
+        document.getElementById('batchUserProgressDetail').textContent = data.message || '';
+
+        if (data.success) {
+            _batchUserData = data.data;
+            document.getElementById('batchUserStatUsers').textContent = data.summary.success_users;
+            document.getElementById('batchUserStatNotes').textContent = data.summary.total_notes;
+            renderBatchUserResults(data.data);
+            document.getElementById('batchUserResults').classList.remove('hidden');
+            showToast(data.message);
+        } else {
+            showToast(data.message, 'error');
+        }
+    })
+    .catch(err => { console.error('startBatchUserCollect failed:', err); showToast('采集失败: ' + err.message, 'error'); })
+    .finally(() => { btn.disabled = false; btn.innerHTML = '🚀 开始批量采集'; });
+}
+
+function renderBatchUserResults(results) {
+    const list = document.getElementById('batchUserResultList');
+    list.innerHTML = results.map(r => {
+        const status = r.success ? '✅' : '❌';
+        const user = r.user || {};
+        const notes = r.notes || [];
+        return `
+        <div class="border border-gray-200 rounded-xl p-4">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="text-lg">${status}</span>
+                <div>
+                    <span class="font-semibold text-sm">${user.nickname || r.url}</span>
+                    <span class="text-xs text-gray-400 ml-2">${notes.length} 条笔记</span>
+                </div>
+            </div>
+            ${notes.length > 0 ? `
+            <div class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                ${notes.slice(0, 10).map(n => `
+                    <div class="bg-gray-50 rounded-lg p-2 text-xs">
+                        <p class="font-medium truncate">${n.title}</p>
+                        <p class="text-gray-400">👍${n.liked} 💬${n.comment} ⭐${n.collected}</p>
+                    </div>
+                `).join('')}
+                ${notes.length > 10 ? `<div class="text-xs text-gray-400 text-center py-2">... 还有 ${notes.length - 10} 条</div>` : ''}
+            </div>` : `<p class="text-xs text-gray-400">${r.message || '未获取到笔记'}</p>`}
+        </div>`;
+    }).join('');
+}
+
+function downloadBatchUserImages() {
+    const items = [];
+    _batchUserData.forEach(r => {
+        (r.notes || []).forEach(n => {
+            if (n.images && n.images.length) {
+                items.push({ note_id: n.note_id, images: n.images });
+            }
+        });
+    });
+    if (!items.length) { showToast('没有可下载的图片', 'error'); return; }
+
+    showToast(`⏳ 开始下载 ${items.length} 个笔记的图片...`);
+    fetch('/api/download/batch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ items, folder: 'batch_user_download' })
+    })
+    .then(r => r.json())
+    .then(data => {
+        showToast(data.message, data.success ? 'success' : 'error');
+    })
+    .catch(err => { console.error('downloadBatchUserImages failed:', err); showToast('下载失败', 'error'); });
+}
+
+// 新标签页初始化已合并到上方统一 load 事件中
 
 // Socket.IO 连接状态
 socket.on('connect', () => addLog('🔌 已连接服务器'));

@@ -2,6 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 配置 DNS（解决 Docker build 时 DNS 解析失败）
+RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
+    echo "nameserver 114.114.114.114" >> /etc/resolv.conf
+
 # 系统依赖：Node.js（签名算法需要）+ OpenCV 依赖
 RUN apt-get update && apt-get install -y \
     curl \

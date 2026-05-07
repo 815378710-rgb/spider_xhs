@@ -34,3 +34,14 @@ AGENTS.md
 .agent
 docs
 docx*.env
+*.env
+.env.*
+!web/.env.example
+config/app_config.json
+config/xhs_cookie_pool.json
+config/history.json
+config/stats.json
+config/download_state.json
+config/monitor.json
+deploy_to_nas.py
+gen_icons.py

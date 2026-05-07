@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "小红书 Cookie 采集器",
+  "version": "1.1.2",
+  "description": "一键采集小红书 Cookie 并发送到土豆助手",
+  "permissions": [
+    "cookies",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.xiaohongshu.com/*",
+    "http://192.168.68.162:5000/*",
+    "http://localhost:5000/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

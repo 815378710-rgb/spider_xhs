@@ -7,26 +7,31 @@ from urllib.parse import urlencode
 
 import execjs
 
-# === execjs Node.js 运行时补丁 ===
-# execjs 在 Windows Git Bash 环境下无法自动发现 node，手动注册
+# === execjs Node.js 运行时补丁（唯一入口）===
+# 解决 Windows Git Bash 环境下 execjs 无法自动发现 node 的问题
+# Linux/Docker 中 node 通常在 PATH 里，自动发现，此补丁不生效
 def _ensure_node_runtime():
-    node_cmd = r"D:\node.exe"
-    if os.path.exists(node_cmd):
-        from execjs._external_runtime import ExternalRuntime
-        # 检查是否已经注册过
-        for name, rt in execjs._runtimes._runtimes:
-            if name == "Node" and rt.is_available():
-                return
-        node_rt = ExternalRuntime("Node", [node_cmd], execjs._runner_sources.Node)
-        node_rt._available = True
-        execjs._runtimes._runtimes.insert(0, ("Node", node_rt))
+    # 设置 NODE_PATH 让 node 能找到 crypto-js 等依赖
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'node_modules'))
+    if os.path.isdir(project_root) and not os.environ.get('NODE_PATH'):
+        os.environ['NODE_PATH'] = project_root
+
+    # Windows 特殊路径：手动注册 Node 运行时
+    for candidate in (r"D:\node.exe", r"C:\Program Files\nodejs\node.exe"):
+        if os.path.exists(candidate):
+            from execjs._external_runtime import ExternalRuntime
+            for name, rt in execjs._runtimes._runtimes:
+                if name == "Node" and rt.is_available():
+                    return
+            node_rt = ExternalRuntime("Node", [candidate], execjs._runner_sources.Node)
+            node_rt._available = True
+            execjs._runtimes._runtimes.insert(0, ("Node", node_rt))
+            return
 
 _ensure_node_runtime()
 # === end patch ===
 
 from xhs_utils.cookie_util import trans_cookies
-
-_STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
 
 _STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -149,6 +154,10 @@ def generate_headers(a1, api, data='', method='POST'):
 
 def generate_request_params(cookies_str, api, data='', method='POST'):
     cookies = trans_cookies(cookies_str)
+    if 'a1' not in cookies or not cookies['a1']:
+        from xhs_utils.common_util import generate_a1
+        cookies['a1'] = generate_a1()
+        print(f"[generate_request_params] cookies 中缺少 a1, 已自动生成: {cookies['a1'][:16]}...")
     a1 = cookies['a1']
     headers, data = generate_headers(a1, api, data, method)
     return headers, cookies, data
