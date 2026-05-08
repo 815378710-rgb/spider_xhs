@@ -1118,6 +1118,7 @@ function batchSearch() {
             keyword,
             count: parseInt(document.getElementById('searchCount').value),
             sort_type: parseInt(document.getElementById('searchSort').value),
+            note_type: parseInt(document.getElementById('searchNoteType')?.value || '0'),
         })
     })
     .then(r => r.json())
@@ -1695,7 +1696,7 @@ function fetchModelsForSwitch() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
             provider: config.llm_provider || 'mimo',
-            api_key: document.getElementById('settingApiKey')?.value || '',
+            api_key: config.llm_api_key || '',
             base_url: config.llm_base_url || '',
         })
     })
@@ -1704,9 +1705,13 @@ function fetchModelsForSwitch() {
         if (data.models?.length) {
             allModels = data.models;
             renderModelSwitchList(data.models);
+        } else {
+            document.getElementById('modelSwitchList').innerHTML = '<p class="text-sm text-gray-400 text-center py-4">' + (data.message || '未获取到模型，请手动输入') + '</p>';
         }
     })
-    .catch(() => {});
+    .catch(() => {
+        document.getElementById('modelSwitchList').innerHTML = '<p class="text-sm text-gray-400 text-center py-4">获取模型列表失败</p>';
+    });
 }
 
 // ── Chrome 插件检测 ──
@@ -1738,6 +1743,7 @@ function addMonitorKeyword() {
     if (!kw) { showToast('请输入关键词', 'error'); return; }
     const btn = document.getElementById('btnAddMonitor');
     btn.disabled = true;
+    btn.innerHTML = '⏳ 添加中...';
     fetch('/api/monitor/keywords', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1755,7 +1761,10 @@ function addMonitorKeyword() {
             loadMonitorKeywords();
         }
     })
-    .finally(() => { btn.disabled = false; });
+    .catch(err => {
+        showToast('添加监控失败: ' + err.message, 'error');
+    })
+    .finally(() => { btn.disabled = false; btn.innerHTML = '➕ 添加监控'; });
 }
 
 function loadMonitorKeywords() {
@@ -2052,6 +2061,12 @@ function startBatchUserCollect() {
     document.getElementById('batchUserResults').classList.add('hidden');
     document.getElementById('batchUserProgressBar').style.width = '10%';
     document.getElementById('batchUserProgressTitle').textContent = `正在采集 ${urls.length} 个用户...`;
+    document.getElementById('batchUserProgressDetail').textContent = '预计需要 ' + Math.ceil(urls.length * 3) + ' 秒';
+
+    // 使用 AbortController 设置超时（每个用户约3秒，总计 +30秒缓冲）
+    const timeoutMs = Math.max(120000, urls.length * 5000 + 30000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     fetch('/api/user/batch', {
         method: 'POST',
@@ -2059,9 +2074,10 @@ function startBatchUserCollect() {
         body: JSON.stringify({
             urls,
             max_notes: parseInt(document.getElementById('batchUserMaxNotes').value) || 50,
-        })
+        }),
+        signal: controller.signal,
     })
-    .then(r => r.json())
+    .then(r => { clearTimeout(timer); return r.json(); })
     .then(data => {
         document.getElementById('batchUserProgressBar').style.width = '100%';
         document.getElementById('batchUserProgressTitle').textContent = '采集完成！';
@@ -2078,7 +2094,16 @@ function startBatchUserCollect() {
             showToast(data.message, 'error');
         }
     })
-    .catch(err => { console.error('startBatchUserCollect failed:', err); showToast('采集失败: ' + err.message, 'error'); })
+    .catch(err => {
+        clearTimeout(timer);
+        console.error('startBatchUserCollect failed:', err);
+        const msg = err.name === 'AbortError'
+            ? `采集超时（${Math.round(timeoutMs/1000)}秒），可能用户主页数据量过大`
+            : '采集失败: ' + err.message;
+        showToast(msg, 'error');
+        document.getElementById('batchUserProgressTitle').textContent = '采集失败';
+        document.getElementById('batchUserProgressDetail').textContent = msg;
+    })
     .finally(() => { btn.disabled = false; btn.innerHTML = '🚀 开始批量采集'; });
 }
 

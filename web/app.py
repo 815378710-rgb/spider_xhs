@@ -1043,37 +1043,74 @@ def batch_search():
         # 过滤出笔记类型，数据从 note_card 里提取
         note_list = []
         for note in notes:
-            if note.get('model_type') == 'note':
-                nc = note.get('note_card', {})
-                # 提取封面图
-                cover = nc.get('cover', {})
-                cover_url = ''
-                cover_info = cover.get('info_list', [])
-                if cover_info:
-                    cover_url = cover_info[0].get('url', '') if cover_info else ''
-                if not cover_url:
-                    cover_url = cover.get('url_default', '') or cover.get('url_pre', '')
+            # 兼容不同 API 版本：有时 model_type='note'，有时没有此字段但有 note_card
+            nc = note.get('note_card', {})
+            model_type = note.get('model_type', '')
+            nc_type = nc.get('type', '')
 
-                # 提取交互数据
-                interact = nc.get('interact_info', {})
-                liked = interact.get('liked_count', '0')
+            # 跳过明显不是笔记的条目（如广告、用户卡片等）
+            if model_type not in ('note', '', None) and model_type != 'note':
+                # 如果有 note_card 内容，仍然尝试解析
+                if not nc:
+                    continue
 
-                # 解析 liked_count（可能是字符串 "1.2万" 之类的）
-                if isinstance(liked, str):
-                    liked_text = liked
-                else:
-                    liked_text = str(liked)
+            # 提取封面图 - 多种字段兼容
+            cover = nc.get('cover', {})
+            cover_url = ''
+            # 尝试 info_list
+            cover_info = cover.get('info_list', [])
+            if cover_info:
+                cover_url = cover_info[0].get('url', '') if cover_info else ''
+            # 尝试 url_default / url_pre
+            if not cover_url:
+                cover_url = cover.get('url_default', '') or cover.get('url_pre', '')
+            # 尝试 image_list（有些格式把封面放在 image_list 里）
+            if not cover_url:
+                img_list = nc.get('image_list', [])
+                if img_list:
+                    first_img = img_list[0]
+                    img_info = first_img.get('info_list', [])
+                    if img_info:
+                        cover_url = img_info[0].get('url', '')
+                    else:
+                        cover_url = first_img.get('url_default', '') or first_img.get('url_pre', '')
 
-                note_list.append({
-                    'id': note.get('id', ''),
-                    'title': nc.get('title', '') or note.get('display_title', '') or '(无标题)',
-                    'desc': (nc.get('desc', '') or '')[:80],
-                    'author': nc.get('user', {}).get('nickname', '') or '未知',
-                    'likes': liked_text,
-                    'type': nc.get('type', note.get('model_type', '')),
-                    'cover': cover_url,
-                    'xsec_token': note.get('xsec_token', ''),
-                })
+            # 提取交互数据 - 兼容字符串和数字
+            interact = nc.get('interact_info', {})
+            liked = interact.get('liked_count', '0')
+            liked_text = str(liked) if not isinstance(liked, str) else liked
+
+            # 提取类型
+            note_type = nc.get('type', '') or nc_type or model_type or ''
+            if note_type not in ('video', 'normal', '图文', '视频'):
+                # 根据是否视频判断
+                video_info = nc.get('video', {})
+                note_type = 'video' if video_info else 'normal'
+
+            # 提取标题 - 多字段兼容
+            title = nc.get('title', '') or note.get('display_title', '') or note.get('note_card', {}).get('note_card', {}).get('title', '') or ''
+            if not title:
+                # 从 desc 截取
+                desc_raw = nc.get('desc', '') or ''
+                title = desc_raw[:30] or '(无标题)'
+
+            # 提取作者
+            user_info = nc.get('user', {})
+            author = user_info.get('nickname', '') or user_info.get('nick_name', '') or '未知'
+
+            # 提取 xsec_token
+            xsec = note.get('xsec_token', '') or nc.get('xsec_token', '') or ''
+
+            note_list.append({
+                'id': note.get('id', '') or nc.get('note_id', ''),
+                'title': title,
+                'desc': (nc.get('desc', '') or '')[:80],
+                'author': author,
+                'likes': liked_text,
+                'type': note_type,
+                'cover': cover_url,
+                'xsec_token': xsec,
+            })
         
         return jsonify({'success': True, 'data': note_list})
         
