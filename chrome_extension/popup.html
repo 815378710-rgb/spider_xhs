@@ -34,6 +34,9 @@ body { width: 380px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
 .refresh-link { color: #ff2442; cursor: pointer; text-decoration: none; font-size: 11px; }
 .refresh-link:hover { text-decoration: underline; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+/* Toggle switch */
+.toggle-wrap input:checked + #proxySlider { background: #ff2442; }
+.toggle-wrap input:checked + #proxySlider + #proxyDot { transform: translateX(18px); }
 </style>
 </head>
 <body>
@@ -66,11 +69,28 @@ body { width: 380px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
       🍪 一键采集 Cookie
     </button>
 
+    <div style="margin-top: 10px">
+      <div class="status-card" style="padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:12px;font-weight:600;color:#333">🔄 浏览器代理转发</span>
+          <label style="position:relative;display:inline-block;width:40px;height:22px;cursor:pointer">
+            <input type="checkbox" id="proxyToggle" onchange="toggleProxy()" style="opacity:0;width:0;height:0">
+            <span style="position:absolute;inset:0;background:#ccc;border-radius:22px;transition:.3s" id="proxySlider"></span>
+            <span style="position:absolute;left:3px;top:3px;width:16px;height:16px;background:#fff;border-radius:50%;transition:.3s" id="proxyDot"></span>
+          </label>
+        </div>
+        <div style="font-size:11px;color:#888;line-height:1.4">
+          开启后：浏览器实时监听小红书请求，服务端通过浏览器转发 API 调用，绕过反爬检测。
+        </div>
+        <div id="proxyStats" style="font-size:11px;color:#666;margin-top:4px"></div>
+      </div>
+    </div>
+
     <div id="msg" class="msg" style="display:none"></div>
   </div>
 
   <div class="footer">
-    <span>v1.1.0</span>
+    <span>v2.0.0</span>
     <a class="refresh-link" onclick="manualRefresh()">🔄 刷新状态</a>
   </div>
 

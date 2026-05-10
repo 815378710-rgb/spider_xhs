@@ -45,3 +45,13 @@ config/download_state.json
 config/monitor.json
 deploy_to_nas.py
 gen_icons.py
+
+# Debug / test scripts
+debug_*.py
+check_*.py
+deploy_*.py
+test_*.py
+deep_*.py
+verify_*.py
+download_*.py
+debug_images/

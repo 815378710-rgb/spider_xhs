@@ -1,9 +1,12 @@
 """
 AI 文案改写模块
 支持 DeepSeek / MiMo 大模型，可扩展
+支持 Agent 辩论机制：多Agent并行改写 → 评审打分 → 输出最优方案
 """
 import json
 import os
+import re
+import threading
 from abc import ABC, abstractmethod
 from loguru import logger
 
@@ -64,7 +67,7 @@ class DeepSeekBackend(LLMBackend):
             "temperature": 0.8,
             "max_tokens": 2000,
         }
-        resp = requests.post(url, headers=headers, json=body, timeout=60)
+        resp = requests.request('POST', url, headers=headers, json=body, timeout=60)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
 
@@ -111,11 +114,11 @@ class MiMoBackend(LLMBackend):
         }
         # 推理模型需要更多 token（大量 token 用于思考过程）
         body["max_tokens"] = 8000
-        resp = requests.post(url, headers=headers, json=body, timeout=120)
+        resp = requests.request('POST', url, headers=headers, json=body, timeout=120)
         if resp.status_code == 401:
             headers.pop("Authorization", None)
             headers["api-key"] = self.api_key
-            resp = requests.post(url, headers=headers, json=body, timeout=120)
+            resp = requests.request('POST', url, headers=headers, json=body, timeout=120)
         resp.raise_for_status()
         msg = resp.json()["choices"][0]["message"]
         # 推理模型 content 可能为空，取 reasoning_content
@@ -152,7 +155,7 @@ class OpenAICompatBackend(LLMBackend):
             "temperature": 0.8,
             "max_tokens": 2000,
         }
-        resp = requests.post(url, headers=headers, json=body, timeout=60)
+        resp = requests.request('POST', url, headers=headers, json=body, timeout=60)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
 
@@ -294,11 +297,72 @@ STYLE_INSTRUCTIONS = {
 - 适当加「私藏」「回购N次」等词增加信任感
 - 收尾用「你们还有什么好用的XX推荐吗」引导评论
 - 关键词侧重：清单词（合集/清单/必入/好物）+ 品类词""",
+
+    "日常分享风": """【日常分享专项指令】
+- 标题用轻松口语化表达，像发朋友圈一样自然（「最近入手的XX」「终于找到好用的XX」）
+- 正文像跟朋友聊天，语气随意亲切，不要太正式
+- 分享真实的使用场景和生活片段，弱化营销感
+- 适当加入生活化的 emoji（☕️🏠🌿），不要太商业
+- 收尾用「你们平时怎么用的」「有同款吗」拉近距离
+- 关键词侧重：生活词（日常/通勤/居家/出门）+ 品类词""",
+
+    "避雷种草风": """【避雷种草专项指令】
+- 标题用「避雷」「踩坑」「别买」等反向词汇制造好奇（「XX千万别买！除非你...」）
+- 正文先说1-2个真实缺点（增加可信度），再转折说优点
+- 用「但是！」「没想到」「真香」制造反差感
+- 语气要真诚坦率，像闺蜜之间的真心话
+- 收尾用「你们踩过类似的坑吗」引导评论
+- 关键词侧重：避雷词（避雷/踩坑/后悔/真香）+ 品类词""",
+
+    "懒人速成风": """【懒人速成专项指令】
+- 标题强调简单快速（「3步搞定XX」「1分钟学会XX」「懒人必看」）
+- 正文极简步骤化，每步一句话说清楚
+- 不废话不啰嗦，直接上干货
+- 用「省流版」「一图看懂」等关键词
+- 收尾用「学会了吗」「这么简单还不试试」
+- 关键词侧重：效率词（懒人/速成/快速/简单/一步）+ 品类词""",
+
+    "学生党省钱风": """【学生党省钱专项指令】
+- 标题突出价格优势（「学生党平价XX」「XX只要9.9」「穷学生的福音」）
+- 正文重点标注价格和性价比，对比同类产品
+- 加入学生身份认同（「宿舍里都在用」「食堂钱省下来买这个」）
+- 分享省钱小技巧和优惠信息
+- 收尾用「学生党互推」「还有更便宜的吗」引导互动
+- 关键词侧重：价格词（平价/学生党/便宜/省钱/性价比）+ 人群词""",
+
+    "情感故事风": """【情感故事专项指令】
+- 标题用故事化悬念（「用了XX之后，我的生活变了...」「那个改变我的XX」）
+- 正文用第一人称叙述，有起承转合的完整故事
+- 融入个人情感和心路历程，让读者产生代入感
+- 产品植入要自然，像故事的一部分而不是广告
+- 收尾用「你们有过类似的经历吗」引发共鸣
+- 关键词侧重：情感词（改变/治愈/温暖/回忆）+ 品类词""",
+
+    "专业成分党": """【专业成分党专项指令】
+- 标题用专业术语+数据（「含XX%烟酰胺的XX实测」「成分解析：XX到底值不值」）
+- 正文列出核心成分及其功效，用数据说话
+- 对比成分浓度和配方表，体现专业度
+- 用「成分表解读」「配方分析」等专业词汇
+- 收尾用「成分党来聊聊」「你们看重哪些成分」引导讨论
+- 关键词侧重：成分词（成分/配方/浓度/功效/成分表）+ 品牌词""",
 }
 
 
+def _get_ratio_instruction(ratio: int) -> str:
+    """根据改写比例返回对应的 prompt 指令"""
+    if ratio <= 30:
+        return "【改写比例：轻微润色（约30%）】\n保留原文的结构和大部分措辞，仅优化语句通顺度、调整语序、点缀emoji。标题可以微调，正文主体内容保持原样。"
+    elif ratio <= 50:
+        return "【改写比例：平衡改写（约50%，推荐）】\n保持核心意思不变，改写约一半的文字。优化标题吸引力和开头hook，调整段落节奏，换用更小红书化的表达。"
+    elif ratio <= 70:
+        return "【改写比例：深度改写（约70%）】\n大幅调整文章结构和措辞，仅保留核心卖点和关键数据（价格、成分、效果等）。标题必须重写，正文用全新的叙述方式。"
+    else:
+        return "【改写比例：全面重塑（约90%）】\n仅保留产品核心信息（品名、价格、核心功效），其余完全重新创作。标题、开头、正文结构、结尾全部重写，像写一篇全新的笔记。"
+
+
 def rewrite_note(title: str, desc: str, backend: LLMBackend,
-                 extra_instructions: str = None, style: str = "保持原风格") -> dict:
+                 extra_instructions: str = None, style: str = "保持原风格",
+                 ratio: int = 50) -> dict:
     """
     改写一篇笔记的标题和正文
 
@@ -307,13 +371,18 @@ def rewrite_note(title: str, desc: str, backend: LLMBackend,
         desc: 原正文
         backend: LLM 后端实例
         extra_instructions: 额外的改写指令（可选，可与 style 叠加）
-        style: 改写风格（保持原风格/种草带货风/干货教程风/情绪共鸣风/测评对比风/清单合集风）
+        style: 改写风格（12种可选）
+        ratio: 改写比例（30-90），控制改写幅度
 
     Returns:
-        {"title": "改写后标题", "desc": "改写后正文", "provider": "xxx", "style": "xxx"}
+        {"title": "改写后标题", "desc": "改写后正文", "provider": "xxx", "style": "xxx", "ratio": 50}
     """
     # 组装 user prompt
     user_prompt = f"请改写以下小红书笔记：\n\n【原标题】{title}\n\n【原正文】{desc}"
+
+    # 叠加改写比例指令
+    ratio_instruction = _get_ratio_instruction(ratio)
+    user_prompt += f"\n\n{ratio_instruction}"
 
     # 叠加风格指令
     style_instruction = STYLE_INSTRUCTIONS.get(style)
@@ -324,13 +393,14 @@ def rewrite_note(title: str, desc: str, backend: LLMBackend,
     if extra_instructions:
         user_prompt += f"\n\n【用户额外要求】{extra_instructions}"
 
-    logger.info(f"正在使用 {backend.name} 改写文案 (风格: {style})...")
+    logger.info(f"正在使用 {backend.name} 改写文案 (风格: {style}, 比例: {ratio}%)...")
     raw = backend.chat(SYSTEM_PROMPT, user_prompt)
 
     # 解析 JSON 响应
     result = _parse_response(raw)
     result["provider"] = backend.name
     result["style"] = style
+    result["ratio"] = ratio
     logger.info(f"改写完成: {result['title'][:30]}...")
     return result
 
@@ -372,7 +442,6 @@ def _parse_response(raw: str) -> dict:
         pass
 
     # 尝试提取 ```json ... ``` 块
-    import re
     m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
     if m:
         try:
@@ -394,6 +463,220 @@ def _parse_response(raw: str) -> dict:
     # 兜底：把整个输出当正文，标题留空
     logger.warning("模型返回格式异常，使用兜底方案")
     return {"title": "", "desc": raw}
+
+
+# ── Agent 辩论系统 ────────────────────────────────────────────────────────────
+# 3个专业Agent并行改写 → 评审Agent打分 → 输出最优方案
+
+AGENT_PROFILES = {
+    "A": {
+        "name": "爆款猎手",
+        "emoji": "🔥",
+        "system_prompt": """你是一个小红书爆款内容专家，专攻标题党和情绪驱动。你的目标是让笔记获得最高点击率和互动率。
+
+核心能力：
+- 标题制造强烈点击欲（数字冲击、情绪词、悬念感）
+- 前3行hook必须让人停不下来
+- 大量使用小红书高频情绪词（绝了/谁懂/救命/太香了/后悔没早买）
+- 互动引导强烈（评论区见/你们觉得呢/姐妹们冲）
+
+输出格式：严格JSON {"title": "改写后的标题", "desc": "改写后的正文"}"""
+    },
+    "B": {
+        "name": "干货专家",
+        "emoji": "📚",
+        "system_prompt": """你是一个小红书干货内容专家，专攻信息密度和实用价值。你的目标是让笔记获得高收藏率和搜索排名。
+
+核心能力：
+- 标题精准包含搜索关键词（教程/攻略/步骤/方法）
+- 正文结构清晰，步骤化呈现，方便截图收藏
+- 信息密度高，每句话都有实际价值
+- 关键词布局精准，覆盖品类词+功效词+人群词
+
+输出格式：严格JSON {"title": "改写后的标题", "desc": "改写后的正文"}"""
+    },
+    "C": {
+        "name": "人设博主",
+        "emoji": "💫",
+        "system_prompt": """你是一个小红书人设博主内容专家，专攻真实感和粉丝信任。你的目标是让笔记建立长期粉丝粘性。
+
+核心能力：
+- 标题像朋友分享（最近发现/自用回购/终于找到）
+- 正文有个人故事和真实体验感
+- 语气自然不做作，像跟闺蜜聊天
+- 适度分享缺点增加可信度，真诚推荐而非硬广
+
+输出格式：严格JSON {"title": "改写后的标题", "desc": "改写后的正文"}"""
+    },
+}
+
+JUDGE_SYSTEM_PROMPT = """你是一个小红书内容评审专家。你需要从3个版本中选出综合最优的一个。
+
+## 评分维度（每项1-10分）
+1. **标题吸引力**：是否有点击欲？是否制造了好奇心？
+2. **内容质量**：信息量、可读性、结构清晰度
+3. **互动引导**：是否有评论/收藏/点赞的引导设计
+4. **关键词布局**：搜索关键词是否自然融入
+5. **风格一致性**：与目标改写风格的匹配程度
+
+## 输出格式
+严格输出JSON，不要输出其他内容：
+{
+  "winner": "A或B或C",
+  "scores": {
+    "A": {"title": 8, "content": 7, "interaction": 9, "keywords": 7, "style": 8, "total": 39},
+    "B": {"title": 7, "content": 9, "interaction": 7, "keywords": 8, "style": 7, "total": 38},
+    "C": {"title": 8, "content": 8, "interaction": 8, "keywords": 7, "style": 9, "total": 40}
+  },
+  "reasoning": "版本C综合评分最高，人设真实感强，互动引导自然..."
+}"""
+
+
+def _agent_rewrite_single(agent_key: str, title: str, desc: str, style: str,
+                          ratio: int, backend: LLMBackend, results: dict):
+    """单个Agent改写（线程回调）"""
+    profile = AGENT_PROFILES[agent_key]
+    try:
+        user_prompt = f"请改写以下小红书笔记：\n\n【原标题】{title}\n\n【原正文】{desc}"
+        ratio_instruction = _get_ratio_instruction(ratio)
+        user_prompt += f"\n\n{ratio_instruction}"
+        style_instruction = STYLE_INSTRUCTIONS.get(style)
+        if style_instruction:
+            user_prompt += f"\n\n{style_instruction}"
+
+        logger.info(f"[Agent {agent_key}:{profile['name']}] 开始改写...")
+        raw = backend.chat(profile["system_prompt"], user_prompt)
+        result = _parse_response(raw)
+        result["agent"] = agent_key
+        result["agent_name"] = profile["name"]
+        result["agent_emoji"] = profile["emoji"]
+        results[agent_key] = result
+        logger.info(f"[Agent {agent_key}:{profile['name']}] 改写完成: {result['title'][:30]}...")
+    except Exception as e:
+        logger.error(f"[Agent {agent_key}:{profile['name']}] 改写失败: {e}")
+        results[agent_key] = {"title": title, "desc": desc, "agent": agent_key,
+                               "agent_name": profile["name"], "agent_emoji": profile["emoji"],
+                               "error": str(e)}
+
+
+def rewrite_with_debate(title: str, desc: str, backend: LLMBackend,
+                        style: str = "保持原风格", ratio: int = 50) -> dict:
+    """
+    Agent 辩论改写：3个Agent并行改写 → 评审Agent打分 → 输出最优方案
+
+    Args:
+        title: 原标题
+        desc: 原正文
+        backend: LLM 后端实例
+        style: 改写风格
+        ratio: 改写比例
+
+    Returns:
+        {
+            "winner": {...},          # 最优方案（含title, desc, agent_name等）
+            "alternatives": [...],    # 其他两个方案
+            "scores": {...},          # 各Agent评分
+            "reasoning": "...",       # 评审理由
+            "all_versions": [...]     # 3个完整版本
+        }
+    """
+    logger.info(f"Agent 辩论启动 (风格: {style}, 比例: {ratio}%)")
+
+    # Phase 1: 3个Agent并行改写
+    results = {}
+    threads = []
+    for key in ["A", "B", "C"]:
+        t = threading.Thread(
+            target=_agent_rewrite_single,
+            args=(key, title, desc, style, ratio, backend, results)
+        )
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join(timeout=120)  # 最多等2分钟
+
+    # 检查是否有足够结果
+    successful = [k for k in ["A", "B", "C"] if "error" not in results.get(k, {})]
+    if len(successful) < 2:
+        logger.warning(f"辩论降级：仅 {len(successful)} 个Agent成功，退回单次改写")
+        # 降级：取第一个成功的，或走普通改写
+        if successful:
+            fallback = results[successful[0]]
+            fallback["provider"] = backend.name
+            fallback["style"] = style
+            fallback["ratio"] = ratio
+            fallback["debate_degraded"] = True
+            return {"winner": fallback, "alternatives": [], "scores": {},
+                    "reasoning": "辩论降级：部分Agent失败，使用最佳单次结果",
+                    "all_versions": list(results.values())}
+        else:
+            raise RuntimeError("所有Agent改写均失败")
+
+    # Phase 2: 评审Agent打分
+    logger.info("评审Agent开始打分...")
+    versions_text = ""
+    for key in ["A", "B", "C"]:
+        r = results.get(key, {})
+        versions_text += f"\n\n【版本{key} - {r.get('agent_name', key)}】\n标题：{r.get('title', '')}\n正文：{r.get('desc', '')}"
+
+    judge_prompt = f"请评审以下3个改写版本，目标风格：{style}，改写比例：{ratio}%\n{versions_text}"
+
+    try:
+        judge_raw = backend.chat(JUDGE_SYSTEM_PROMPT, judge_prompt)
+        # 尝试解析评审结果
+        judge_result = _parse_judge_response(judge_raw)
+        logger.info(f"评审完成，获胜者: {judge_result.get('winner', 'A')}")
+    except Exception as e:
+        logger.error(f"评审失败: {e}，使用默认获胜者A")
+        judge_result = {"winner": "A", "scores": {}, "reasoning": f"评审异常: {e}"}
+
+    winner_key = judge_result.get("winner", "A")
+    winner = results.get(winner_key, results.get("A"))
+    winner["provider"] = backend.name
+    winner["style"] = style
+    winner["ratio"] = ratio
+
+    alternatives = [results[k] for k in ["A", "B", "C"]
+                    if k != winner_key and "error" not in results.get(k, {})]
+
+    return {
+        "winner": winner,
+        "alternatives": alternatives,
+        "scores": judge_result.get("scores", {}),
+        "reasoning": judge_result.get("reasoning", ""),
+        "all_versions": list(results.values()),
+    }
+
+
+def _parse_judge_response(raw: str) -> dict:
+    """解析评审Agent的JSON响应"""
+    try:
+        data = json.loads(raw)
+        if "winner" in data:
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    m = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(1))
+            if "winner" in data:
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    # 找包含 "winner" 的 JSON 块
+    m = re.search(r'\{[^{}]*"winner"[^{}]*\}', raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            pass
+
+    logger.warning("评审响应解析失败，使用默认值")
+    return {"winner": "A", "scores": {}, "reasoning": "评审响应格式异常"}
 
 
 # ── 使用示例 ──────────────────────────────────────────────────────────────────

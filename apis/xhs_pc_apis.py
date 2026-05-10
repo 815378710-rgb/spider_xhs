@@ -1,6 +1,7 @@
 # encoding: utf-8
 import json
 import re
+import time
 import urllib
 import requests
 from xhs_utils.xhs_util import splice_str, generate_request_params, generate_x_b3_traceid, generate_search_id, generate_search_request_id, generate_x_rap_param, get_common_headers
@@ -14,6 +15,92 @@ from loguru import logger
 def _log_api_error(error):
     logger.exception(f'XHS PC API request failed: {error}')
     return str(error)
+
+# ── 全局请求增强：频率控制 + 代理 + 指纹 ──
+_global_rate_limiter = None
+_global_proxy_pool = None
+
+def _get_rate_limiter():
+    global _global_rate_limiter
+    if _global_rate_limiter is None:
+        try:
+            from utils.rate_limiter import rate_limiter
+            _global_rate_limiter = rate_limiter
+        except ImportError:
+            pass
+    return _global_rate_limiter
+
+def _get_proxy_pool():
+    global _global_proxy_pool
+    if _global_proxy_pool is None:
+        try:
+            from utils.proxy_pool import proxy_pool
+            _global_proxy_pool = proxy_pool
+        except ImportError:
+            pass
+    return _global_proxy_pool
+
+def _safe_request(method, url, **kwargs):
+    """统一请求入口：自动插入代理 + 失败重试。
+    频率延迟仅在 batch_mode=True 时生效（由批量操作显式开启）
+    _skip_enhance=True 可跳过所有增强（图片下载等不需要反爬增强的场景）"""
+    # 确保 timeout 存在但不重复
+    kwargs.setdefault('timeout', REQUEST_TIMEOUT)
+
+    # 快捷出口：跳过增强（图片下载、代理转发等）
+    if kwargs.pop('_skip_enhance', False):
+        return requests.request(method, url, **kwargs)
+
+    pool = _get_proxy_pool()
+
+    # 仅 batch_mode 时启用频率延迟
+    if kwargs.pop('_batch_mode', False):
+        limiter = _get_rate_limiter()
+        if limiter:
+            limiter.wait_if_needed()
+
+    # 代理注入（如果调用方没传 proxies）
+    proxy_url = None
+    if pool and 'proxies' not in kwargs:
+        p = pool.get_proxy()
+        if p:
+            kwargs['proxies'] = p
+            proxy_url = p.get('http', '')
+
+    # 重试逻辑（最多2次，间隔递增）
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.request(method, url, **kwargs)
+            if pool and proxy_url:
+                pool.report_success(proxy_url)
+            return resp
+        except Exception as e:
+            last_err = e
+            if pool and proxy_url:
+                pool.report_failure(proxy_url)
+            if attempt < 2:
+                wait = (attempt + 1) * 2
+                logger.warning(f"[safe_request] {method} {url[:60]}... 失败(尝试{attempt+1}/3): {e}, {wait}s后重试")
+                time.sleep(wait)
+            else:
+                logger.error(f"[safe_request] {method} {url[:60]}... 最终失败: {e}")
+    raise last_err
+
+# ── Monkey-patch requests 模块 ──
+# 将 requests.get / requests.post 替换为 _safe_request 版本
+# 这样 xhs_pc_apis.py 中所有 requests.get/post 自动走增强通道
+_original_requests_get = requests.get
+_original_requests_post = requests.post
+
+def _patched_get(url, **kwargs):
+    return _safe_request('GET', url, **kwargs)
+
+def _patched_post(url, **kwargs):
+    return _safe_request('POST', url, **kwargs)
+
+requests.get = _patched_get
+requests.post = _patched_post
 
 
 def _get_query_params(parsed_url):
@@ -224,13 +311,16 @@ class XHS_Apis():
                 success, msg, res_json = self.get_user_note_info(user_id, cursor, cookies_str, xsec_token, xsec_source, proxies)
                 if not success:
                     raise Exception(msg)
-                notes = res_json["data"]["notes"]
-                if 'cursor' in res_json["data"]:
-                    cursor = str(res_json["data"]["cursor"])
+                api_data = res_json.get("data")
+                if api_data is None:
+                    break
+                notes = api_data.get("notes", [])
+                if 'cursor' in api_data:
+                    cursor = str(api_data["cursor"])
                 else:
                     break
                 note_list.extend(notes)
-                if len(notes) == 0 or not res_json["data"]["has_more"]:
+                if len(notes) == 0 or not api_data.get("has_more", False):
                     break
         except Exception as e:
             success = False
@@ -523,7 +613,7 @@ class XHS_Apis():
             }
             headers, cookies, data = generate_request_params(cookies_str, api, data, 'POST')
             headers["x-rap-param"] = generate_x_rap_param(api, data)
-            response = requests.post(self.base_url + api, headers=headers, data=data.encode('utf-8'), cookies=cookies, proxies=proxies, timeout=REQUEST_TIMEOUT)
+            response = requests.post(self.base_url + api, headers=headers, data=data.encode('utf-8'), cookies=cookies, proxies=proxies)
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
         except Exception as e:
@@ -590,7 +680,7 @@ class XHS_Apis():
                 }
             }
             headers, cookies, data = generate_request_params(cookies_str, api, data, 'POST')
-            response = requests.post(self.base_url + api, headers=headers, data=data.encode('utf-8'), cookies=cookies, proxies=proxies, timeout=REQUEST_TIMEOUT)
+            response = requests.post(self.base_url + api, headers=headers, data=data.encode('utf-8'), cookies=cookies, proxies=proxies)
             res_json = response.json()
             success, msg = res_json["success"], res_json["msg"]
         except Exception as e:

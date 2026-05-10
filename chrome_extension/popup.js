@@ -21,6 +21,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     checkXhsStatus();
     checkServerStatus();
+    loadProxyState();
+    // 通知 background 更新 serverUrl
+    try { chrome.runtime.sendMessage({ type: 'SET_SERVER_URL', url: serverUrl }); } catch (e) {}
 });
 
 // ── 保存服务端地址 ──
@@ -213,6 +216,51 @@ async function collectCookie() {
 function manualRefresh() {
     checkXhsStatus();
     checkServerStatus();
+    loadProxyState();
+}
+
+// ── 浏览器代理开关 ──
+async function toggleProxy() {
+    const toggle = document.getElementById('proxyToggle');
+    const enabled = toggle.checked;
+    try {
+        chrome.runtime.sendMessage({ type: 'TOGGLE_PROXY', enabled });
+        updateProxySlider(enabled);
+        if (enabled) {
+            showMsg('info', '🔄 浏览器代理已开启，正在监听小红书请求...');
+        } else {
+            showMsg('info', '⏸️ 浏览器代理已关闭');
+        }
+        setTimeout(loadProxyState, 500);
+    } catch (e) {
+        showMsg('error', '操作失败: ' + e.message);
+        toggle.checked = !enabled;
+    }
+}
+
+function updateProxySlider(enabled) {
+    const slider = document.getElementById('proxySlider');
+    const dot = document.getElementById('proxyDot');
+    slider.style.background = enabled ? '#ff2442' : '#ccc';
+    dot.style.transform = enabled ? 'translateX(18px)' : 'translateX(0)';
+}
+
+async function loadProxyState() {
+    try {
+        chrome.runtime.sendMessage({ type: 'GET_PROXY_STATS' }, (resp) => {
+            if (!resp) return;
+            const { stats, proxyEnabled } = resp;
+            const toggle = document.getElementById('proxyToggle');
+            toggle.checked = !!proxyEnabled;
+            updateProxySlider(!!proxyEnabled);
+            const statsEl = document.getElementById('proxyStats');
+            if (proxyEnabled) {
+                statsEl.textContent = `已转发 ${stats.totalForwarded || 0} 次 | 成功 ${stats.successCount || 0} | 失败 ${stats.failCount || 0}`;
+            } else {
+                statsEl.textContent = '';
+            }
+        });
+    } catch (e) {}
 }
 
 // ── 消息显示 ──

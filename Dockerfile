@@ -18,8 +18,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # 先复制依赖文件，利用 Docker 缓存
-COPY requirements.txt package.json package-lock.json ./
-RUN pip install --no-cache-dir -r requirements.txt && npm install
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制整个项目
 COPY . .
@@ -31,4 +31,4 @@ ENV NODE_ENV=production
 
 EXPOSE 5000
 
-CMD ["python", "web/app.py"]
+CMD ["python", "backend/main.py"]

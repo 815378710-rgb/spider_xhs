@@ -10,6 +10,7 @@ import json
 import time
 import random
 import threading
+import urllib.parse
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, Response
 from flask_socketio import SocketIO, emit
@@ -18,7 +19,7 @@ from dotenv import load_dotenv
 
 from apis.xhs_pc_apis import XHS_Apis
 from apis.xhs_pc_login_apis import XHSLoginApi
-from utils.rewrite import create_backend, rewrite_note
+from utils.rewrite import create_backend, rewrite_note, rewrite_with_debate
 from utils.image_processor import process_images
 
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -222,6 +223,30 @@ _XHS_IMG_HEADERS = {
     'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
 }
 
+def _resolve_short_url(url):
+    """解析小红书短链接（xhslink.com）为完整长链接"""
+    if 'xhslink.com' not in url:
+        return url
+    try:
+        import requests as req
+        resp = req.head(url, allow_redirects=False, timeout=10,
+                        headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)'})
+        if resp.status_code in (301, 302):
+            resolved = resp.headers.get('Location', url)
+            logger.info(f"[short_url] {url[:40]} -> {resolved[:80]}")
+            return resolved
+        # 有些短链服务器直接 GET 跟随
+        resp = req.request('GET', url, allow_redirects=True, timeout=10,
+                       headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)'})
+        resolved = resp.url
+        if resolved != url:
+            logger.info(f"[short_url] {url[:40]} -> {resolved[:80]}")
+            return resolved
+    except Exception as e:
+        logger.warning(f"[short_url] 解析短链接失败: {url} -> {e}")
+    return url
+
+
 def _download_image(url, save_dir=None):
     """下载 XHS CDN 图片到本地，返回本地路径 /static/cached_images/xxx.jpg"""
     import requests as req
@@ -247,7 +272,10 @@ def _download_image(url, save_dir=None):
     last_error = None
     for headers in header_sets:
         try:
-            resp = req.get(url, headers=headers, timeout=20)
+            # 注意：必须用 requests.request() 而非 req.get()，
+            # 因为 req.get 已被 monkey-patch 为 _safe_request（注入代理/重试），
+            # 图片下载不需要这些增强，直接用 request 绕过。
+            resp = req.request('GET', url, headers=headers, timeout=20)
             if resp.status_code == 200 and len(resp.content) > 1000:
                 with open(filepath, 'wb') as f:
                     f.write(resp.content)
@@ -307,6 +335,149 @@ def update_config():
             logger.warning(f"同步 cookie 到池失败: {e}")
 
     return jsonify({'success': True, 'message': '配置已更新'})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 反爬增强: 频率控制 / 代理池 / 指纹管理
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/anti-crawl/config', methods=['GET'])
+def get_anti_crawl_config():
+    """获取反爬配置"""
+    from utils.rate_limiter import rate_limiter
+    from utils.proxy_pool import proxy_pool
+
+    fp_info = {}
+    try:
+        from utils.fingerprint import get_fingerprint
+        fp = get_fingerprint()
+        fp_info = fp.get_summary()
+    except Exception:
+        pass
+
+    return jsonify({
+        'success': True,
+        'rate_limiter': rate_limiter.get_stats(),
+        'proxy_pool': proxy_pool.get_pool_info(),
+        'fingerprint': fp_info,
+    })
+
+
+@app.route('/api/anti-crawl/config', methods=['POST'])
+def update_anti_crawl_config():
+    """更新反爬配置"""
+    data = request.json or {}
+    from utils.rate_limiter import rate_limiter
+    from utils.proxy_pool import proxy_pool
+
+    rl = data.get('rate_limiter', {})
+    if rl:
+        rate_limiter.update_config(
+            min_delay=rl.get('min_delay'),
+            max_delay=rl.get('max_delay'),
+            max_concurrent=rl.get('max_concurrent'),
+        )
+
+    pp = data.get('proxy_pool', {})
+    if pp:
+        proxy_pool.update_config(
+            enabled=pp.get('enabled'),
+            proxy_list=pp.get('proxies'),
+            check_interval=pp.get('check_interval'),
+        )
+
+    return jsonify({'success': True, 'message': '反爬配置已更新'})
+
+
+@app.route('/api/anti-crawl/fingerprint', methods=['POST'])
+def regenerate_fingerprint():
+    """重新生成浏览器指纹"""
+    from utils.fingerprint import regenerate_fingerprint
+    fp = regenerate_fingerprint()
+    # 清除 xhs_util 中的指纹缓存，使下一次请求使用新指纹
+    import xhs_utils.xhs_util as xu
+    xu._FINGERPRINT_CACHE = None
+    return jsonify({
+        'success': True,
+        'message': '新指纹已生成',
+        'fingerprint': fp.get_summary(),
+    })
+
+
+@app.route('/api/anti-crawl/proxy/check', methods=['POST'])
+def check_proxy_health():
+    """检查代理池健康状态"""
+    from utils.proxy_pool import proxy_pool
+    results = proxy_pool.health_check()
+    return jsonify({'success': True, 'results': results})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 浏览器代理转发队列 — Chrome 扩展从这里拉取请求
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_PROXY_QUEUE = []  # [{"request_id": "...", "method": "GET", "url": "...", "headers": {}, "body": "", "created_at": float}]
+_PROXY_RESULTS = {}  # request_id -> {"success": bool, "status": int, "data": dict, "error": str}
+_PROXY_LOCK = threading.Lock()
+
+@app.route('/api/proxy/pending', methods=['GET'])
+def proxy_pending():
+    """Chrome 扩展轮询：获取待转发的请求"""
+    with _PROXY_LOCK:
+        # 清理超过60秒未响应的请求
+        now = time.time()
+        _PROXY_QUEUE[:] = [r for r in _PROXY_QUEUE if now - r.get('created_at', 0) < 60]
+        pending = list(_PROXY_QUEUE[:5])  # 最多同时5个
+        _PROXY_QUEUE[:] = _PROXY_QUEUE[5:]
+    return jsonify({
+        'success': True,
+        'requests': [
+            {k: v for k, v in r.items() if k != 'created_at'}
+            for r in pending
+        ],
+    })
+
+
+@app.route('/api/proxy/result', methods=['POST'])
+def proxy_result():
+    """Chrome 扩展回传请求结果"""
+    data = request.json or {}
+    request_id = data.get('request_id', '')
+    with _PROXY_LOCK:
+        _PROXY_RESULTS[request_id] = {
+            'success': data.get('success', False),
+            'status': data.get('status', 0),
+            'data': data.get('data'),
+            'error': data.get('error', ''),
+        }
+    return jsonify({'success': True})
+
+
+def _enqueue_browser_request(method, url, headers=None, body=None, timeout=30):
+    """将请求加入浏览器代理队列，等待 Chrome 扩展转发"""
+    import uuid as _uuid
+    request_id = str(_uuid.uuid4())[:12]
+
+    with _PROXY_LOCK:
+        _PROXY_QUEUE.append({
+            'request_id': request_id,
+            'method': method,
+            'url': url,
+            'headers': headers or {},
+            'body': body or '',
+            'created_at': time.time(),
+        })
+
+    # 等待结果
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with _PROXY_LOCK:
+            result = _PROXY_RESULTS.pop(request_id, None)
+        if result is not None:
+            return result
+        time.sleep(0.3)
+
+    return {'success': False, 'error': 'timeout: 浏览器代理未响应'}
 
 
 @app.route('/api/stats', methods=['GET'])
@@ -413,7 +584,7 @@ def list_models():
 
     try:
         import requests as req
-        resp = req.get(target_url, headers=headers, timeout=10)
+        resp = req.request('GET', target_url, headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
 
@@ -827,7 +998,10 @@ def collect_note():
     note_url = data.get('url', '').strip()
     if not note_url:
         return jsonify({'success': False, 'message': '请输入笔记链接'})
-    
+
+    # 解析短链接
+    note_url = _resolve_short_url(note_url)
+
     if not CONFIG['cookies']:
         return jsonify({'success': False, 'message': 'Cookie 未配置'})
     
@@ -838,9 +1012,18 @@ def collect_note():
         
         if not success:
             return jsonify({'success': False, 'message': f'采集失败: {msg}'})
-        
-        note = note_info['data']['items'][0]
-        note_card = note['note_card']
+
+        # 安全获取 note 数据（API 可能返回空 data）
+        items = note_info.get('data', {}).get('items', [])
+        if not items:
+            # 尝试另一种数据结构（有些笔记返回 note_card 在顶层）
+            note_card = note_info.get('data', {}).get('note_card', None)
+            if not note_card:
+                return jsonify({'success': False, 'message': f'采集失败: 笔记数据为空，请检查链接是否有效'})
+            note = note_info['data']
+        else:
+            note = items[0]
+            note_card = note['note_card']
         
         # 提取图片并下载到本地（CDN 403 防盗链，必须本地缓存）
         images = []
@@ -927,6 +1110,188 @@ def rewrite_note_api():
         return jsonify({'success': False, 'message': f'改写异常: {str(e)}'})
 
 
+@app.route('/api/note/rewrite_smart', methods=['POST'])
+def rewrite_smart_api():
+    """智能改写（支持Agent辩论）"""
+    data = request.json
+    title = data.get('title', '')
+    desc = data.get('desc', '')
+    style = data.get('style', '保持原风格')
+    ratio = int(data.get('ratio', 50))
+    model = data.get('model', '')
+    debate = data.get('debate', True)
+
+    if not title and not desc:
+        return jsonify({'success': False, 'message': '没有可改写的内容'})
+
+    if not CONFIG['llm_api_key']:
+        return jsonify({'success': False, 'message': 'AI API Key 未配置'})
+
+    try:
+        backend = get_llm_backend(model_override=model or None)
+        if not backend:
+            return jsonify({'success': False, 'message': '创建 AI 后端失败'})
+
+        if debate:
+            result = rewrite_with_debate(title, desc, backend, style=style, ratio=ratio)
+        else:
+            # 单次改写，包装成辩论格式
+            single = rewrite_note(title, desc, backend, style=style, ratio=ratio)
+            result = {
+                "winner": single,
+                "alternatives": [],
+                "scores": {},
+                "reasoning": "单次改写模式，未启用辩论",
+                "all_versions": [single],
+            }
+
+        update_daily_stats()
+        STATS['today_rewritten'] += 1
+        STATS['total_rewritten'] += 1
+
+        return jsonify({'success': True, 'data': result})
+
+    except Exception as e:
+        logger.exception(f"智能改写异常: {e}")
+        return jsonify({'success': False, 'message': f'改写异常: {str(e)}'})
+
+
+@app.route('/api/note/batch_rewrite', methods=['POST'])
+def batch_rewrite_api():
+    """批量改写笔记（来自批量采集的选中结果）"""
+    data = request.json or {}
+    notes = data.get('notes', [])  # [{title, desc}, ...]
+    style = data.get('style', '保持原风格')
+    ratio = int(data.get('ratio', 50))
+    debate = data.get('debate', True)
+    model = data.get('model', '')
+
+    if not notes:
+        return jsonify({'success': False, 'message': '没有可改写的笔记'})
+    if len(notes) > 20:
+        return jsonify({'success': False, 'message': '单次最多改写 20 条笔记'})
+    if not CONFIG['llm_api_key']:
+        return jsonify({'success': False, 'message': 'AI API Key 未配置'})
+
+    try:
+        backend = get_llm_backend(model_override=model or None)
+        if not backend:
+            return jsonify({'success': False, 'message': '创建 AI 后端失败'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'AI 后端初始化失败: {str(e)}'})
+
+    task_id = f'batch_rw_{int(time.time())}'
+    results = []
+    total = len(notes)
+    success_count = 0
+    fail_count = 0
+
+    for i, note in enumerate(notes):
+        title = note.get('title', '')
+        desc = note.get('desc', '')
+        original_title = title
+
+        # 推送进度
+        socketio.emit('batch_rewrite_progress', {
+            'task_id': task_id,
+            'current': i + 1,
+            'total': total,
+            'status': 'rewriting',
+            'message': f'正在改写 {i+1}/{total}: {title[:20]}...',
+        })
+
+        try:
+            time.sleep(random.uniform(0.5, 1.5))  # 防 API 限流
+
+            if debate:
+                result = rewrite_with_debate(title, desc, backend, style=style, ratio=ratio)
+                # 取 winner 作为最终结果
+                winner = result.get('winner', {})
+                rewritten = {
+                    'title': winner.get('title', ''),
+                    'desc': winner.get('desc', ''),
+                }
+                scores = result.get('scores', {})
+                reasoning = result.get('reasoning', '')
+                all_versions = result.get('all_versions', [])
+            else:
+                single = rewrite_note(title, desc, backend, style=style, ratio=ratio)
+                rewritten = {
+                    'title': single.get('title', ''),
+                    'desc': single.get('desc', ''),
+                }
+                scores = {}
+                reasoning = '单次改写模式'
+                all_versions = [single]
+
+            results.append({
+                'original_title': original_title,
+                'original_desc': desc,
+                'rewritten': rewritten,
+                'scores': scores,
+                'reasoning': reasoning,
+                'all_versions': all_versions,
+                'success': True,
+            })
+            success_count += 1
+
+            # 推送单条完成
+            socketio.emit('batch_rewrite_progress', {
+                'task_id': task_id,
+                'current': i + 1,
+                'total': total,
+                'status': 'done',
+                'message': f'✅ {i+1}/{total} 改写完成: {rewritten["title"][:20]}...',
+            })
+
+        except Exception as e:
+            logger.exception(f"[batch_rewrite] 第{i+1}条改写失败: {e}")
+            results.append({
+                'original_title': original_title,
+                'original_desc': desc,
+                'rewritten': {'title': '', 'desc': ''},
+                'scores': {},
+                'reasoning': '',
+                'all_versions': [],
+                'success': False,
+                'error': str(e),
+            })
+            fail_count += 1
+
+            socketio.emit('batch_rewrite_progress', {
+                'task_id': task_id,
+                'current': i + 1,
+                'total': total,
+                'status': 'error',
+                'message': f'❌ {i+1}/{total} 改写失败: {str(e)[:50]}',
+            })
+
+    # 更新统计
+    update_daily_stats()
+    STATS['today_rewritten'] += success_count
+    STATS['total_rewritten'] += success_count
+
+    # 推送全部完成
+    socketio.emit('batch_rewrite_progress', {
+        'task_id': task_id,
+        'current': total,
+        'total': total,
+        'status': 'all_done',
+        'message': f'批量改写完成: {success_count} 成功, {fail_count} 失败',
+    })
+
+    return jsonify({
+        'success': True,
+        'data': results,
+        'summary': {
+            'total': total,
+            'success': success_count,
+            'failed': fail_count,
+        },
+        'message': f'批量改写完成: {success_count}/{total} 成功',
+    })
+
+
 @app.route('/api/images/proxy', methods=['GET'])
 def image_proxy():
     """代理下载小红书 CDN 图片，绕过 Referer 防盗链"""
@@ -941,7 +1306,7 @@ def image_proxy():
             'Referer': 'https://www.xiaohongshu.com/',
             'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
         }
-        resp = req.get(url, headers=headers, timeout=20, stream=True)
+        resp = req.request('GET', url, headers=headers, timeout=20, stream=True)
         resp.raise_for_status()
         content_type = resp.headers.get('Content-Type', 'image/jpeg')
         from flask import Response as FlaskResponse
@@ -972,38 +1337,60 @@ def process_images_api():
                 with open(fs_path, 'rb') as f:
                     img_bytes = f.read()
             else:
-                # Fallback: 尝试下载
+                # Fallback: 尝试下载（使用多套 headers 尝试，和 _download_image 一致）
                 import requests as req
-                dl_headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Referer': 'https://www.xiaohongshu.com/',
-                }
-                resp = req.get(img_path, headers=dl_headers, timeout=20)
-                resp.raise_for_status()
-                img_bytes = resp.content
-            
+                header_sets = [
+                    _XHS_IMG_HEADERS,
+                    {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://www.xiaohongshu.com/'},
+                    {'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'},
+                ]
+                img_bytes = None
+                for dl_headers in header_sets:
+                    try:
+                        resp = req.request('GET', img_path, headers=dl_headers, timeout=20)
+                        if resp.status_code == 200 and len(resp.content) > 1000:
+                            img_bytes = resp.content
+                            break
+                    except Exception:
+                        continue
+                if img_bytes is None:
+                    raise ValueError("CDN 图片下载失败 (HTTP headers 全部失败)")
+
+            if not img_bytes or len(img_bytes) < 100:
+                raise ValueError(f"图片数据无效 (size={len(img_bytes) if img_bytes else 0})")
+
             # 防重处理
             from utils.image_processor import process_image
             processed_bytes = process_image(img_bytes, level)
-            
+
             # 保存到临时目录
             output_dir = os.path.join(os.path.dirname(__file__), 'static', 'processed')
             os.makedirs(output_dir, exist_ok=True)
-            
+
             filename = f"processed_{int(time.time())}_{i}.jpg"
             filepath = os.path.join(output_dir, filename)
-            
+
             with open(filepath, 'wb') as f:
                 f.write(processed_bytes)
-            
+
             processed.append({
                 'original': img_path,
                 'processed': f'/static/processed/{filename}',
                 'filename': filename,
+                'index': i,
             })
-            
+
         except Exception as e:
+            logger.warning(f"[process_images] 图片 {i+1} 处理失败: {img_path[:60]} -> {e}")
             errors.append(f"图片 {i+1}: {str(e)}")
+            # 失败时也占位，保证 processed 长度和 image_paths 一致
+            processed.append({
+                'original': img_path,
+                'processed': None,
+                'filename': None,
+                'index': i,
+                'error': str(e),
+            })
     
     return jsonify({
         'success': len(processed) > 0,
@@ -1087,8 +1474,8 @@ def batch_search():
                 video_info = nc.get('video', {})
                 note_type = 'video' if video_info else 'normal'
 
-            # 提取标题 - 多字段兼容
-            title = nc.get('title', '') or note.get('display_title', '') or note.get('note_card', {}).get('note_card', {}).get('title', '') or ''
+            # 提取标题 - 搜索API用 display_title，详情API用 title
+            title = nc.get('title', '') or nc.get('display_title', '') or note.get('display_title', '') or ''
             if not title:
                 # 从 desc 截取
                 desc_raw = nc.get('desc', '') or ''
@@ -1144,8 +1531,10 @@ def handle_start_task(data):
         try:
             if task_type == 'full_process':
                 # 完整流程：采集 → 改写 → 图片处理
-                url = data.get('url')
+                url = _resolve_short_url(data.get('url', ''))
                 style = data.get('style', '保持原风格')
+                ratio = int(data.get('ratio', 50))
+                debate = data.get('debate', True)
                 model_override = data.get('model', '')
                 image_level = data.get('image_level', 'medium')
                 
@@ -1164,8 +1553,15 @@ def handle_start_task(data):
                 if not success:
                     socketio.emit('task_error', {'task_id': task_id, 'message': f'采集失败: {msg}'})
                     return
-                
-                note = note_info['data']['items'][0]['note_card']
+
+                items = note_info.get('data', {}).get('items', [])
+                if items:
+                    note = items[0]['note_card']
+                else:
+                    note = note_info.get('data', {}).get('note_card', {})
+                    if not note:
+                        socketio.emit('task_error', {'task_id': task_id, 'message': '采集失败: 笔记数据为空'})
+                        return
                 title = note.get('title', '')
                 desc = note.get('desc', '')
 
@@ -1225,24 +1621,82 @@ def handle_start_task(data):
                     'data': {'title': title, 'desc': desc, 'images': images},
                 })
 
-                # Step 2: AI 改写
-                socketio.emit('task_progress', {
-                    'task_id': task_id,
-                    'step': 'rewrite',
-                    'message': '正在 AI 改写...',
-                    'progress': 40,
-                })
-                
+                # Step 2: AI 改写（支持辩论模式）
                 backend = get_llm_backend(model_override=model_override or None)
-                result = rewrite_note(title, desc, backend, style=style)
-                
-                socketio.emit('task_progress', {
-                    'task_id': task_id,
-                    'step': 'rewrite_done',
-                    'message': '改写完成',
-                    'progress': 60,
-                    'data': result,
-                })
+
+                if debate:
+                    # Agent 辩论模式
+                    socketio.emit('task_progress', {
+                        'task_id': task_id,
+                        'step': 'debate_start',
+                        'message': '🤖 启动 Agent 辩论模式...',
+                        'progress': 40,
+                    })
+
+                    # 通知前端各Agent开始
+                    for key in ['A', 'B', 'C']:
+                        from utils.rewrite import AGENT_PROFILES
+                        profile = AGENT_PROFILES[key]
+                        socketio.emit('task_progress', {
+                            'task_id': task_id,
+                            'step': 'agent_running',
+                            'message': f"{profile['emoji']} {profile['name']} 正在改写...",
+                            'progress': 42,
+                            'agent': key,
+                        })
+
+                    socketio.emit('task_progress', {
+                        'task_id': task_id,
+                        'step': 'rewrite',
+                        'message': '🤖 3个Agent并行改写中...',
+                        'progress': 45,
+                    })
+
+                    debate_result = rewrite_with_debate(title, desc, backend, style=style, ratio=ratio)
+                    _debate_result = debate_result
+                    result = debate_result['winner']
+
+                    # 通知前端辩论结果
+                    socketio.emit('task_progress', {
+                        'task_id': task_id,
+                        'step': 'debate_result',
+                        'message': f"评审完成！最优方案: {result.get('agent_emoji','')} {result.get('agent_name','')}",
+                        'progress': 58,
+                        'debate_result': {
+                            'winner_agent': result.get('agent', ''),
+                            'winner_name': result.get('agent_name', ''),
+                            'winner_emoji': result.get('agent_emoji', ''),
+                            'scores': debate_result.get('scores', {}),
+                            'reasoning': debate_result.get('reasoning', ''),
+                            'all_versions': debate_result.get('all_versions', []),
+                        },
+                    })
+
+                    socketio.emit('task_progress', {
+                        'task_id': task_id,
+                        'step': 'rewrite_done',
+                        'message': f"辩论完成，最优方案: {result.get('agent_name','')}",
+                        'progress': 60,
+                        'data': result,
+                    })
+                else:
+                    # 普通改写模式
+                    socketio.emit('task_progress', {
+                        'task_id': task_id,
+                        'step': 'rewrite',
+                        'message': f'正在 AI 改写... (风格:{style} 比例:{ratio}%)',
+                        'progress': 40,
+                    })
+
+                    result = rewrite_note(title, desc, backend, style=style, ratio=ratio)
+
+                    socketio.emit('task_progress', {
+                        'task_id': task_id,
+                        'step': 'rewrite_done',
+                        'message': '改写完成',
+                        'progress': 60,
+                        'data': result,
+                    })
                 
                 # Step 3: 图片处理（从本地读取，不再下载）
                 socketio.emit('task_progress', {
@@ -1282,14 +1736,20 @@ def handle_start_task(data):
                         logger.warning(f"图片处理失败: {e}")
                 
                 # 完成
+                complete_data = {
+                    'original': {'title': title, 'desc': desc},
+                    'rewritten': result,
+                    'images_original': images,
+                    'images_processed': processed_images,
+                }
+                # 如果是辩论模式，附带辩论结果
+                debate_result_data = locals().get('_debate_result', None)
+                if debate_result_data:
+                    complete_data['debate'] = debate_result_data
+
                 socketio.emit('task_complete', {
                     'task_id': task_id,
-                    'data': {
-                        'original': {'title': title, 'desc': desc},
-                        'rewritten': result,
-                        'images_original': images,        # 本地路径
-                        'images_processed': processed_images,  # 本地路径
-                    },
+                    'data': complete_data,
                 })
 
                 update_daily_stats()
@@ -1523,7 +1983,7 @@ def monitor_check():
                     new_notes.append({
                         'note_id': note_id,
                         'keyword': kw['keyword'],
-                        'title': nc.get('title', '') or '(无标题)',
+                        'title': nc.get('title', '') or nc.get('display_title', '') or note.get('display_title', '') or '(无标题)',
                         'desc': (nc.get('desc', '') or '')[:200],
                         'author': nc.get('user', {}).get('nickname', ''),
                         'author_id': nc.get('user', {}).get('user_id', ''),
@@ -1739,32 +2199,34 @@ def kol_profile():
         if user_id:
             success, msg, user_info = xhs.get_user_info(user_id, CONFIG['cookies'])
         else:
-            success, msg, user_info = xhs.get_user_all_notes(user_url, CONFIG['cookies'])
+            # 从 URL 提取 user_id，再获取用户信息
+            urlParse = urllib.parse.urlparse(user_url)
+            user_id = urlParse.path.split("/")[-1]
+            success, msg, user_info = xhs.get_user_info(user_id, CONFIG['cookies'])
 
         if not success:
             return jsonify({'success': False, 'message': f'获取失败: {msg}'})
 
         # 获取用户笔记
         notes = []
-        if user_id:
-            time.sleep(random.uniform(0.5, 1.5))
-            try:
-                nsuccess, nmsg, note_data = xhs.get_user_note_info(user_id, '', CONFIG['cookies'])
-                if nsuccess and note_data:
-                    for n in note_data.get('notes', []):
-                        nc = n.get('note_card', {})
-                        interact = nc.get('interact_info', {})
-                        notes.append({
-                            'note_id': n.get('id', ''),
-                            'title': nc.get('title', '') or '(无标题)',
-                            'desc': (nc.get('desc', '') or '')[:100],
-                            'liked': interact.get('liked_count', '0'),
-                            'collected': interact.get('collected_count', '0'),
-                            'comment': interact.get('comment_count', '0'),
-                            'type': nc.get('type', ''),
-                        })
-            except Exception as e:
-                logger.warning(f"[kol] 获取笔记列表失败: {e}")
+        time.sleep(random.uniform(0.5, 1.5))
+        try:
+            nsuccess, nmsg, note_data = xhs.get_user_note_info(user_id, '', CONFIG['cookies'])
+            if nsuccess and note_data:
+                for n in note_data.get('notes', []):
+                    nc = n.get('note_card', {})
+                    interact = nc.get('interact_info', {})
+                    notes.append({
+                        'note_id': n.get('id', ''),
+                        'title': nc.get('title', '') or nc.get('display_title', '') or n.get('display_title', '') or '(无标题)',
+                        'desc': (nc.get('desc', '') or '')[:100],
+                        'liked': interact.get('liked_count', '0'),
+                        'collected': interact.get('collected_count', '0'),
+                        'comment': interact.get('comment_count', '0'),
+                        'type': nc.get('type', ''),
+                    })
+        except Exception as e:
+            logger.warning(f"[kol] 获取笔记列表失败: {e}")
 
         return jsonify({
             'success': True,
@@ -1894,7 +2356,7 @@ def download_batch():
                         dl_headers = dict(headers)
                         if resume_pos > 0 and os.path.exists(filepath):
                             dl_headers['Range'] = f'bytes={resume_pos}-'
-                            resp = req.get(img_url, headers=dl_headers, timeout=30, stream=True)
+                            resp = req.request('GET', img_url, headers=dl_headers, timeout=30, stream=True)
                             if resp.status_code in (200, 206):
                                 with open(filepath, 'ab') as f:
                                     for chunk in resp.iter_content(chunk_size=8192):
@@ -1906,7 +2368,7 @@ def download_batch():
                                 resp.close()
 
                         if resume_pos == 0:
-                            resp = req.get(img_url, headers=dl_headers, timeout=30, stream=True)
+                            resp = req.request('GET', img_url, headers=dl_headers, timeout=30, stream=True)
                             if resp.status_code == 200:
                                 with open(filepath, 'wb') as f:
                                     for chunk in resp.iter_content(chunk_size=8192):
@@ -2018,30 +2480,99 @@ def user_batch_collect():
             continue
 
         try:
-            time.sleep(random.uniform(1.0, 2.0))
-            success, msg, user_data = xhs.get_user_all_notes(url, CONFIG['cookies'])
+            # 0. 解析短链接
+            url = _resolve_short_url(url)
+
+            # 批量模式下使用配置的延迟
+            from utils.rate_limiter import rate_limiter
+            batch_delay = random.uniform(rate_limiter.min_delay, rate_limiter.max_delay) if rate_limiter.min_delay > 0 else random.uniform(2.0, 5.0)
+            time.sleep(batch_delay)
+
+            # 1. 从 URL 中提取 user_id，获取用户信息
+            urlParse = urllib.parse.urlparse(url)
+            user_id = urlParse.path.split("/")[-1]
+            user_info = {}
+            try:
+                uinfo_ok, uinfo_msg, uinfo_data = xhs.get_user_info(user_id, CONFIG['cookies'])
+                if uinfo_ok and isinstance(uinfo_data, dict):
+                    user_info = uinfo_data.get('data', {})
+            except Exception as ue:
+                logger.warning(f"[batch_user] 获取用户信息失败 {url}: {ue}")
+
+            # 2. 获取用户全部笔记（返回值是 note_list）
+            time.sleep(random.uniform(3.0, 8.0))
+            success, msg, notes_raw = xhs.get_user_all_notes(url, CONFIG['cookies'])
 
             if not success:
                 results.append({'url': url, 'success': False, 'message': msg, 'notes': []})
                 continue
 
-            # 提取用户信息
-            user_info = user_data.get('basic_info', {}) if isinstance(user_data, dict) else {}
-            notes_raw = user_data.get('notes', []) if isinstance(user_data, dict) else []
+            # notes_raw 已经是 list，直接用
+            if notes_raw is None:
+                notes_raw = []
 
             notes = []
             for n in notes_raw[:max_notes]:
                 nc = n.get('note_card', {})
                 interact = nc.get('interact_info', {})
+                note_id = n.get('id', '')
+                xsec_token = n.get('xsec_token', '')
+
+                # user_posted 列表 API 不返回互动数据，需要逐篇获取
+                liked = interact.get('liked_count', '')
+                collected = interact.get('collected_count', '')
+                comment = interact.get('comment_count', '')
+
+                # 如果列表 API 没给互动数据，尝试从详情获取
+                # 注意：'not liked' 对 0 也是 True，所以用 is_empty 检查
+                is_empty = (liked in ('', None) and collected in ('', None) and comment in ('', None))
+                if is_empty and note_id:
+                    try:
+                        note_url = f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token={xsec_token}&xsec_source=app_share"
+                        time.sleep(random.uniform(3.0, 8.0))
+                        ni_ok, ni_msg, ni_data = xhs.get_note_info(note_url, CONFIG['cookies'])
+                        if ni_ok and isinstance(ni_data, dict):
+                            inner_data = ni_data.get('data', {})
+                            items = []
+                            if isinstance(inner_data, dict):
+                                items = inner_data.get('items', [])
+                                # 有时 data.note_card 在顶层
+                                if not items and inner_data.get('note_card'):
+                                    items = [inner_data]
+                            if items:
+                                detail = items[0].get('note_card', {})
+                                detail_interact = detail.get('interact_info', {})
+                                liked = detail_interact.get('liked_count', '0')
+                                collected = detail_interact.get('collected_count', '0')
+                                comment = detail_interact.get('comment_count', '0')
+                                # 也补充 desc（列表 API 的 desc 可能被截断）
+                                full_desc = detail.get('desc', '')
+                                if full_desc:
+                                    nc['desc'] = full_desc
+                                logger.info(f"[batch_user] {note_id} 详情互动: 赞{liked} 藏{collected} 评{comment}")
+                            else:
+                                logger.warning(f"[batch_user] {note_id} get_note_info 返回空 items, data_keys={list(inner_data.keys()) if isinstance(inner_data, dict) else type(inner_data).__name__}")
+                        else:
+                            logger.warning(f"[batch_user] {note_id} get_note_info 失败: {ni_msg}")
+                    except Exception as de:
+                        logger.warning(f"[batch_user] 获取笔记详情异常 {note_id}: {de}")
+
+                if liked is None or liked == '':
+                    liked = '0'
+                if collected is None or collected == '':
+                    collected = '0'
+                if comment is None or comment == '':
+                    comment = '0'
+
                 notes.append({
-                    'note_id': n.get('id', ''),
-                    'title': nc.get('title', '') or '(无标题)',
+                    'note_id': note_id,
+                    'title': nc.get('title', '') or nc.get('display_title', '') or n.get('display_title', '') or '(无标题)',
                     'desc': (nc.get('desc', '') or '')[:200],
-                    'liked': interact.get('liked_count', '0'),
-                    'collected': interact.get('collected_count', '0'),
-                    'comment': interact.get('comment_count', '0'),
+                    'liked': liked,
+                    'collected': collected,
+                    'comment': comment,
                     'type': nc.get('type', ''),
-                    'xsec_token': n.get('xsec_token', ''),
+                    'xsec_token': xsec_token,
                     # 图片
                     'images': [
                         img.get('info_list', [{}])[1 if len(img.get('info_list', [])) > 1 else 0].get('url', '')
@@ -2109,7 +2640,7 @@ def user_notes():
             interact = nc.get('interact_info', {})
             notes.append({
                 'note_id': n.get('id', ''),
-                'title': nc.get('title', '') or '(无标题)',
+                'title': nc.get('title', '') or nc.get('display_title', '') or n.get('display_title', '') or '(无标题)',
                 'desc': (nc.get('desc', '') or '')[:200],
                 'liked': interact.get('liked_count', '0'),
                 'collected': interact.get('collected_count', '0'),

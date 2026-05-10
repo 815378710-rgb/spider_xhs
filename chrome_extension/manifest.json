@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "小红书 Cookie 采集器",
-  "version": "1.1.2",
-  "description": "一键采集小红书 Cookie 并发送到土豆助手",
+  "name": "土豆小红书助手 - 浏览器代理",
+  "version": "2.0.0",
+  "description": "小红书 Cookie 采集 + 浏览器代理转发，绕过服务端反爬检测",
   "permissions": [
     "cookies",
     "activeTab",
@@ -11,9 +11,15 @@
   ],
   "host_permissions": [
     "*://*.xiaohongshu.com/*",
+    "*://*.edith.xiaohongshu.com/*",
+    "*://*.as.xiaohongshu.com/*",
     "http://192.168.68.162:5000/*",
-    "http://localhost:5000/*"
+    "http://192.168.68.161:5005/*",
+    "http://localhost:5005/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

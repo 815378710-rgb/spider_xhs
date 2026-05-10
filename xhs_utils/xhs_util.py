@@ -97,7 +97,23 @@ def generate_x_rap_param(api, data, app_id=None):
         data = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
     return _get_static_js('xhs_rap.js').call('generate_x_rap_param', api, data or '', app_id)
 
+_FINGERPRINT_CACHE = None
+
+def _get_fingerprint():
+    global _FINGERPRINT_CACHE
+    if _FINGERPRINT_CACHE is None:
+        try:
+            from utils.fingerprint import get_fingerprint
+            _FINGERPRINT_CACHE = get_fingerprint()
+        except ImportError:
+            _FINGERPRINT_CACHE = None
+    return _FINGERPRINT_CACHE
+
 def get_common_headers():
+    fp = _get_fingerprint()
+    ua = fp.get_user_agent() if fp else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+    sec_ch_ua = fp.get_sec_ch_ua() if fp else '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"'
+    sec_ch_ua_platform = fp.get_sec_ch_ua_platform() if fp else '"Windows"'
     return {
         "authority": "www.xiaohongshu.com",
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -105,17 +121,21 @@ def get_common_headers():
         "cache-control": "no-cache",
         "pragma": "no-cache",
         "referer": "https://www.xiaohongshu.com/",
-        "sec-ch-ua": "\"Chromium\";v=\"122\", \"Not(A:Brand\";v=\"24\", \"Google Chrome\";v=\"122\"",
+        "sec-ch-ua": sec_ch_ua,
         "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Windows\"",
+        "sec-ch-ua-platform": sec_ch_ua_platform,
         "sec-fetch-dest": "document",
         "sec-fetch-mode": "navigate",
         "sec-fetch-site": "same-origin",
         "sec-fetch-user": "?1",
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "user-agent": ua,
     }
 def get_request_headers_template():
+    fp = _get_fingerprint()
+    ua = fp.get_user_agent() if fp else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+    sec_ch_ua = fp.get_sec_ch_ua() if fp else '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"'
+    sec_ch_ua_platform = fp.get_sec_ch_ua_platform() if fp else '"Windows"'
     return {
         "authority": "edith.xiaohongshu.com",
         "accept": "application/json, text/plain, */*",
@@ -125,13 +145,13 @@ def get_request_headers_template():
         "origin": "https://www.xiaohongshu.com",
         "pragma": "no-cache",
         "referer": "https://www.xiaohongshu.com/",
-        "sec-ch-ua": "\"Not A(Brand\";v=\"99\", \"Microsoft Edge\";v=\"121\", \"Chromium\";v=\"121\"",
+        "sec-ch-ua": sec_ch_ua,
         "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Windows\"",
+        "sec-ch-ua-platform": sec_ch_ua_platform,
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-site",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+        "user-agent": ua,
         "x-b3-traceid": "",
         "x-mns": "unload",
         "x-s": "",

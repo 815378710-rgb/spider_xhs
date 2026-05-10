@@ -83,6 +83,10 @@ class ImageProcessor:
         h, w = img.shape[:2]
         logger.debug(f"原始尺寸: {w}x{h}")
 
+        # 先检测原始图的内容区域
+        orig_content = self._detect_content_bbox(img)
+        orig_content_area = orig_content[2] * orig_content[3] if orig_content else 0
+
         # 按顺序处理
         if self.enable_resize:
             img = self._resize(img)
@@ -98,6 +102,25 @@ class ImageProcessor:
 
         if self.enable_noise:
             img = self._add_noise(img)
+
+        # 安全检查：验证处理后内容是否保留
+        new_content = self._detect_content_bbox(img)
+        new_content_area = new_content[2] * new_content[3] if new_content else 0
+
+        if orig_content_area > 0:
+            preservation_ratio = new_content_area / orig_content_area
+            if preservation_ratio < 0.3:
+                logger.warning(f"内容保留不足 ({preservation_ratio:.1%})，回退亮度/对比度调整")
+                # 回退到更安全的参数重新处理
+                img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+                if self.enable_resize:
+                    img = self._resize(img)
+                if self.enable_crop:
+                    img = self._crop(img)
+                if self.enable_rotate:
+                    img = self._rotate(img)
+                # 使用更保守的颜色调整
+                img = self._safe_adjust_color(img)
 
         # 编码为 JPEG（随机质量）
         quality = random.randint(*self.jpeg_quality_range)
@@ -145,21 +168,50 @@ class ImageProcessor:
         return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
 
     def _crop(self, img: np.ndarray) -> np.ndarray:
-        """边缘轻微裁切"""
+        """边缘轻微裁切（智能避让内容区域）"""
         h, w = img.shape[:2]
         margin = self.crop_margin
-        # 每边随机裁 margin% ~ margin*1.5%
-        top = int(h * random.uniform(margin, margin * 1.5))
-        bottom = int(h * random.uniform(margin, margin * 1.5))
-        left = int(w * random.uniform(margin, margin * 1.5))
-        right = int(w * random.uniform(margin, margin * 1.5))
+
+        # 先检测内容区域，避免裁掉内容
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY_INV)
+        coords = cv2.findNonZero(thresh)
+
+        if coords is not None:
+            cx, cy, cw, ch = cv2.boundingRect(coords)
+            # 内容占图像比例
+            content_area_ratio = (cw * ch) / (w * h)
+            # 如果内容占比超过60%，只在内容区域外裁切
+            if content_area_ratio > 0.6:
+                # 计算可裁切的最大范围（内容边缘之外）
+                max_top = max(0, cy - 2)
+                max_bottom = max(0, h - (cy + ch) - 2)
+                max_left = max(0, cx - 2)
+                max_right = max(0, w - (cx + cw) - 2)
+                # 取可裁范围和 margin 的较小值
+                top = int(min(max_top, h * random.uniform(0, margin)))
+                bottom = int(min(max_bottom, h * random.uniform(0, margin)))
+                left = int(min(max_left, w * random.uniform(0, margin)))
+                right = int(min(max_right, w * random.uniform(0, margin)))
+            else:
+                top = int(h * random.uniform(margin * 0.3, margin * 0.8))
+                bottom = int(h * random.uniform(margin * 0.3, margin * 0.8))
+                left = int(w * random.uniform(margin * 0.3, margin * 0.8))
+                right = int(w * random.uniform(margin * 0.3, margin * 0.8))
+        else:
+            # 没有检测到内容，正常裁切
+            top = int(h * random.uniform(margin, margin * 1.5))
+            bottom = int(h * random.uniform(margin, margin * 1.5))
+            left = int(w * random.uniform(margin, margin * 1.5))
+            right = int(w * random.uniform(margin, margin * 1.5))
+
         # 确保裁完还有内容
         if top + bottom >= h - 2 or left + right >= w - 2:
             return img
         return img[top:h - bottom, left:w - right]
 
     def _rotate(self, img: np.ndarray) -> np.ndarray:
-        """随机微旋转"""
+        """随机微旋转（使用白色填充避免反射白边冲淡内容）"""
         angle = random.uniform(*self.rotate_range)
         h, w = img.shape[:2]
         center = (w / 2, h / 2)
@@ -171,8 +223,11 @@ class ImageProcessor:
         new_h = int(h * cos_a + w * sin_a)
         matrix[0, 2] += (new_w - w) / 2
         matrix[1, 2] += (new_h - h) / 2
+        # 使用白色填充（BORDER_CONSTANT with white=255），
+        # 避免 BORDER_REFLECT_101 将白边反射进内容区域
         rotated = cv2.warpAffine(img, matrix, (new_w, new_h),
-                                  borderMode=cv2.BORDER_REFLECT_101)
+                                  borderMode=cv2.BORDER_CONSTANT,
+                                  borderValue=(255, 255, 255))
         # 裁回原始比例（从中心裁）
         rh, rw = rotated.shape[:2]
         y_start = (rh - h) // 2
@@ -180,13 +235,25 @@ class ImageProcessor:
         return rotated[max(0, y_start):y_start + h, max(0, x_start):x_start + w]
 
     def _adjust_color(self, img: np.ndarray) -> np.ndarray:
-        """调整亮度、对比度、饱和度、色温"""
-        # 亮度
-        brightness = random.uniform(*self.brightness_range)
-        img = cv2.add(img, np.full_like(img, brightness, dtype=np.uint8))
+        """调整亮度、对比度、饱和度、色温（自适应：检测图像亮度后智能调整）"""
+        # 检测图像整体亮度
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        mean_brightness = np.mean(gray)
 
-        # 对比度
+        # 亮度自适应：已经很亮的图（>200）减少亮度增加，偏暗的图可多加
+        brightness = random.uniform(*self.brightness_range)
+        if mean_brightness > 200:
+            brightness = min(0, brightness)
+        elif mean_brightness < 80:
+            brightness = max(brightness, 5)
+
+        # 使用 int16 避免 uint8 溢出（旧版 numpy 的 np.full_like 会静默溢出负值）
+        img = np.clip(img.astype(np.int16) + brightness, 0, 255).astype(np.uint8)
+
+        # 对比度自适应：高亮图像减少对比度增强
         contrast = random.uniform(*self.contrast_range)
+        if mean_brightness > 200:
+            contrast = min(contrast, 1.0)
         img = np.clip(img.astype(np.float32) * contrast, 0, 255).astype(np.uint8)
 
         # 饱和度（转 HSV 调整 S 通道）
@@ -197,7 +264,8 @@ class ImageProcessor:
 
         # 色温（BGR 通道偏移）
         temperature = random.uniform(*self.temperature_range)
-        # 偏暖：R 增 G 微增 B 减；偏冷反之
+        if mean_brightness > 200:
+            temperature = temperature * 0.5
         b, g, r = cv2.split(img)
         r = np.clip(r.astype(np.int16) + temperature, 0, 255).astype(np.uint8)
         b = np.clip(b.astype(np.int16) - temperature, 0, 255).astype(np.uint8)
@@ -210,6 +278,37 @@ class ImageProcessor:
         sigma = random.uniform(0.5, self.noise_level)
         noise = np.random.normal(0, sigma, img.shape).astype(np.float32)
         img = np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+        return img
+
+    def _detect_content_bbox(self, img: np.ndarray):
+        """检测图像中文字/内容的边界框，返回 (x, y, w, h) 或 None"""
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # 用自适应阈值检测暗色文字（适合白底图片）
+        _, thresh = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)
+        # 轻微膨胀，连接断裂的文字笔画
+        kernel = np.ones((3, 3), np.uint8)
+        thresh = cv2.dilate(thresh, kernel, iterations=1)
+        coords = cv2.findNonZero(thresh)
+        if coords is None:
+            return None
+        x, y, w, h = cv2.boundingRect(coords)
+        return (x, y, w, h)
+
+    def _safe_adjust_color(self, img: np.ndarray) -> np.ndarray:
+        """安全的颜色调整：只做微小的色温偏移和饱和度调整，不动亮度和对比度"""
+        # 只做色温偏移（范围缩小一半）
+        temperature = random.uniform(*self.temperature_range) * 0.3
+        b, g, r = cv2.split(img)
+        r = np.clip(r.astype(np.int16) + temperature, 0, 255).astype(np.uint8)
+        b = np.clip(b.astype(np.int16) - temperature, 0, 255).astype(np.uint8)
+        img = cv2.merge([b, g, r])
+
+        # 微调饱和度
+        saturation = random.uniform(0.97, 1.03)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation, 0, 255)
+        img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
         return img
 
 

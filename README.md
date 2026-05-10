@@ -1,12 +1,12 @@
 <p align="center">
-    <img width="220" src="./author/logo.jpg" alt="Spider_XHS logo">
+    <img width="220" src="./author/logo.jpg" alt="土豆小红书助手 logo">
 </p>
 
 <div align="center">
 
-# 🥔 土豆小红书助手 (Spider_XHS Fork)
+# 🥔 土豆小红书助手
 
-**小红书笔记采集 + AI 改写 + 图片防重处理 一站式工具**
+**小红书笔记采集 + AI 改写 + 图片防重处理 + 多账号管理 + 定时发布 一站式工具**
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![Node.js](https://img.shields.io/badge/nodejs-20%2B-green)](https://nodejs.org/)
@@ -14,7 +14,7 @@
 
 </div>
 
-> 基于 [cv-cat/Spider_XHS](https://github.com/cv-cat/Spider_XHS) 二次开发，增加了完整的 Web UI、AI 改写、图片防重处理等功能。
+> 基于 [cv-cat/Spider_XHS](https://github.com/cv-cat/Spider_XHS) 二次开发，v2 全栈升级版：FastAPI + React SPA + SQLite + APScheduler。
 
 ## ✨ 功能特性
 
@@ -30,10 +30,15 @@
 - 支持图文 / 视频 / 全部类型筛选
 - 批量选中改写（队列式自动处理）
 
-### 📊 Cookie 管理
-- 扫码登录自动获取 Cookie
-- 手机验证码登录
-- Cookie 池管理（自动验证、清理失效、轮换使用）
+### 📊 多账号管理
+- 多账号 Cookie 管理
+- Cookie 池自动轮换
+- 账号健康检查
+
+### ⏰ 定时发布
+- 一键定时发布（单次 / Cron）
+- 批量发布进度追踪
+- 自动图片处理 + 防重
 
 ### 🛠️ 设置
 - 多 AI 模型支持（DeepSeek / MiMo / OpenAI 兼容）
@@ -46,16 +51,12 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/815378710-rgb/Spider_XHS.git
-cd Spider_XHS
-
-# 配置
-cp web/.env.example web/.env
-# 编辑 web/.env 填入你的 AI API Key
+git clone https://github.com/815378710-rgb/potato-xhs.git
+cd potato-xhs
 
 # 构建并运行
-docker build -t spider-xhs .
-docker run -d --name spider-xhs --network host -v $(pwd)/config:/app/config spider-xhs
+docker build -t potato-xhs .
+docker run -d --name potato-xhs --network host potato-xhs
 ```
 
 访问 `http://localhost:5000`
@@ -63,34 +64,36 @@ docker run -d --name spider-xhs --network host -v $(pwd)/config:/app/config spid
 ### 本地运行
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
+# 后端
+cd backend
+pip install -r ../requirements.txt
+python main.py
+
+# 前端
+cd frontend
 npm install
-
-# 配置
-cp web/.env.example web/.env
-# 编辑 web/.env
-
-# 启动
-python web/app.py
+npm run dev
 ```
 
 ## 📁 项目结构
 
 ```
-Spider_XHS/
+potato-xhs/
+├── backend/                 # FastAPI 后端
+│   ├── main.py              # 入口
+│   ├── core/                # 配置、安全、数据库
+│   ├── routers/             # API 路由
+│   ├── models/              # SQLAlchemy 模型
+│   └── services/            # 定时任务等
+├── frontend/                # React SPA
+│   ├── src/
+│   │   ├── pages/           # 页面组件
+│   │   ├── components/      # 公共组件
+│   │   ├── stores/          # Zustand 状态管理
+│   │   └── api/             # Axios 封装
+│   └── package.json
 ├── apis/                    # 小红书 API 封装
-│   ├── xhs_pc_apis.py       # PC 端 API（采集、搜索等）
-│   ├── xhs_pc_login_apis.py # 登录 API（扫码、手机验证码）
-│   ├── xhs_creator_apis.py  # 创作者平台 API
-│   └── xhs_qianfan_apis.py  # 千帆分销 API
-├── web/                     # Web 应用
-│   ├── app.py               # Flask 主应用
-│   ├── templates/index.html # 前端 SPA
-│   └── api/                 # API 蓝图模块
-├── utils/                   # 工具模块
-│   ├── rewrite.py           # AI 改写引擎
-│   └── image_processor.py   # 图片防重处理
+├── utils/                   # 图片处理、AI改写
 ├── xhs_utils/               # 小红书签名工具
 ├── static/                  # JS 签名模块
 ├── config/                  # 配置文件（持久化）

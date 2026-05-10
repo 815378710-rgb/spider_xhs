@@ -47,9 +47,13 @@
         .fade-in { animation: fadeIn 0.3s ease; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .tab-active { background: linear-gradient(135deg, #ff2442, #ff6b81); color: #fff !important; }
-        .img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
-        .img-card { position: relative; border-radius: 12px; overflow: hidden; aspect-ratio: 1; cursor: pointer; }
-        .img-card img { width: 100%; height: 100%; object-fit: cover; }
+        .img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+        .img-card { position: relative; border-radius: 12px; overflow: hidden; cursor: pointer; max-height: 400px; }
+        .img-card img { width: 100%; height: auto; max-height: 360px; object-fit: contain; display: block; }
+        .img-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.15); transform: scale(1.02); transition: all 0.2s; }
+        /* 图片放大查看弹窗 */
+        .img-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 9999; display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+        .img-lightbox img { max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: 8px; }
         .diff-card { border-left: 4px solid; padding-left: 16px; margin-bottom: 16px; }
         .diff-original { border-color: #d1d5db; }
         .diff-rewritten { border-color: #ff2442; }
@@ -135,12 +139,22 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-500 mb-2">改写风格</label>
                     <select id="rewriteStyle">
-                        <option>保持原风格</option>
-                        <option selected>种草带货风</option>
-                        <option>干货教程风</option>
-                        <option>情绪共鸣风</option>
-                        <option>测评对比风</option>
-                        <option>清单合集风</option>
+                        <optgroup label="基础风格">
+                            <option>保持原风格</option>
+                            <option selected>种草带货风</option>
+                            <option>干货教程风</option>
+                            <option>情绪共鸣风</option>
+                            <option>测评对比风</option>
+                            <option>清单合集风</option>
+                        </optgroup>
+                        <optgroup label="进阶风格">
+                            <option>日常分享风</option>
+                            <option>避雷种草风</option>
+                            <option>懒人速成风</option>
+                            <option>学生党省钱风</option>
+                            <option>情感故事风</option>
+                            <option>专业成分党</option>
+                        </optgroup>
                     </select>
                 </div>
                 <div>
@@ -148,6 +162,34 @@
                     <select id="rewriteModel">
                         <option value="">自动 (跟随设置)</option>
                     </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 mb-5">
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">
+                        改写比例 <span class="text-xhs font-bold" id="ratioValue">50%</span>
+                        <span class="text-xs text-gray-400">（推荐50%）</span>
+                    </label>
+                    <input type="range" id="rewriteRatio" min="30" max="90" value="50" step="10"
+                        class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#ff2442]"
+                        oninput="document.getElementById('ratioValue').textContent = this.value + '%'">
+                    <div class="flex justify-between text-xs text-gray-400 mt-1">
+                        <span>30% 润色</span>
+                        <span>50% 平衡</span>
+                        <span>70% 深度</span>
+                        <span>90% 重塑</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">智能模式</label>
+                    <label class="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-all">
+                        <input type="checkbox" id="agentDebate" checked class="w-5 h-5 accent-[#ff2442]">
+                        <div>
+                            <span class="font-medium text-sm text-gray-700">🤖 智能辩论</span>
+                            <p class="text-xs text-gray-400">3个AI角色并行改写，选出最优方案</p>
+                        </div>
+                    </label>
                 </div>
             </div>
 
@@ -176,6 +218,44 @@
             </div>
         </div>
 
+        <!-- 辩论进度区 -->
+        <div id="debateArea" class="card p-6 mb-6 hidden">
+            <h3 class="font-semibold text-gray-700 mb-4">🤖 Agent 辩论实况</h3>
+            <div id="agentStatusList" class="space-y-3 mb-4">
+                <div id="agent-A" class="flex items-center gap-3 p-3 rounded-xl bg-gray-50 opacity-50">
+                    <span class="text-xl">🔥</span>
+                    <div class="flex-1">
+                        <span class="font-medium text-sm">爆款猎手</span>
+                        <p class="text-xs text-gray-400 agent-status-text">等待中...</p>
+                    </div>
+                    <span class="agent-status-badge badge badge-yellow">排队</span>
+                </div>
+                <div id="agent-B" class="flex items-center gap-3 p-3 rounded-xl bg-gray-50 opacity-50">
+                    <span class="text-xl">📚</span>
+                    <div class="flex-1">
+                        <span class="font-medium text-sm">干货专家</span>
+                        <p class="text-xs text-gray-400 agent-status-text">等待中...</p>
+                    </div>
+                    <span class="agent-status-badge badge badge-yellow">排队</span>
+                </div>
+                <div id="agent-C" class="flex items-center gap-3 p-3 rounded-xl bg-gray-50 opacity-50">
+                    <span class="text-xl">💫</span>
+                    <div class="flex-1">
+                        <span class="font-medium text-sm">人设博主</span>
+                        <p class="text-xs text-gray-400 agent-status-text">等待中...</p>
+                    </div>
+                    <span class="agent-status-badge badge badge-yellow">排队</span>
+                </div>
+            </div>
+            <div id="judgeStatus" class="p-3 rounded-xl bg-purple-50 hidden">
+                <span class="text-sm font-medium text-purple-700">⚖️ 评审Agent：正在综合评分...</span>
+            </div>
+            <div id="debateReasoning" class="p-3 rounded-xl bg-green-50 hidden">
+                <p class="text-sm text-green-700 font-medium">📝 评审结论</p>
+                <p class="text-sm text-green-600 mt-1" id="debateReasoningText"></p>
+            </div>
+        </div>
+
         <!-- 结果对比区 -->
         <div id="resultArea" class="hidden">
             <div class="grid grid-cols-2 gap-6 mb-6">
@@ -193,7 +273,7 @@
                 <!-- 改写后 -->
                 <div class="card p-6 diff-card diff-rewritten border border-xhs/20 fade-in">
                     <div class="flex justify-between items-center mb-4">
-                        <h3 class="font-semibold text-xhs">✨ 改写后</h3>
+                        <h3 class="font-semibold text-xhs">✨ 改写后 <span id="winnerBadge" class="text-sm font-normal"></span></h3>
                         <span class="badge" style="background:rgba(255,36,66,0.1);color:#ff2442" id="rewriteProvider"></span>
                     </div>
                     <h4 id="rewrittenTitle" class="font-bold text-gray-900 mb-3 text-lg"></h4>
@@ -201,6 +281,46 @@
                     <div class="flex gap-2 mt-5">
                         <button onclick="copyText('rewrittenTitle')" class="btn-secondary text-sm flex-1">📋 复制标题</button>
                         <button onclick="copyText('rewrittenDesc')" class="btn-secondary text-sm flex-1">📋 复制正文</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 辩论方案对比（仅辩论模式显示） -->
+            <div id="debateCompareArea" class="card p-6 mb-6 hidden">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-semibold text-gray-700">📊 多方案对比</h3>
+                    <button onclick="document.getElementById('altVersions').classList.toggle('hidden')" class="btn-secondary text-sm">展开/收起</button>
+                </div>
+                <div id="altVersions" class="hidden space-y-4">
+                    <div id="altA" class="p-4 rounded-xl bg-gray-50 border border-gray-100">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-lg">🔥</span>
+                            <span class="font-medium text-sm">爆款猎手</span>
+                            <span class="text-xs text-gray-400 score-badge"></span>
+                        </div>
+                        <h5 class="font-bold text-sm alt-title mb-2"></h5>
+                        <p class="text-xs text-gray-500 whitespace-pre-wrap max-h-40 overflow-y-auto alt-desc"></p>
+                        <button onclick="copyText(this)" class="mt-2 text-xs text-xhs hover:underline">📋 复制</button>
+                    </div>
+                    <div id="altB" class="p-4 rounded-xl bg-gray-50 border border-gray-100">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-lg">📚</span>
+                            <span class="font-medium text-sm">干货专家</span>
+                            <span class="text-xs text-gray-400 score-badge"></span>
+                        </div>
+                        <h5 class="font-bold text-sm alt-title mb-2"></h5>
+                        <p class="text-xs text-gray-500 whitespace-pre-wrap max-h-40 overflow-y-auto alt-desc"></p>
+                        <button onclick="copyText(this)" class="mt-2 text-xs text-xhs hover:underline">📋 复制</button>
+                    </div>
+                    <div id="altC" class="p-4 rounded-xl bg-gray-50 border border-gray-100">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-lg">💫</span>
+                            <span class="font-medium text-sm">人设博主</span>
+                            <span class="text-xs text-gray-400 score-badge"></span>
+                        </div>
+                        <h5 class="font-bold text-sm alt-title mb-2"></h5>
+                        <p class="text-xs text-gray-500 whitespace-pre-wrap max-h-40 overflow-y-auto alt-desc"></p>
+                        <button onclick="copyText(this)" class="mt-2 text-xs text-xhs hover:underline">📋 复制</button>
                     </div>
                 </div>
             </div>
@@ -399,7 +519,7 @@
     <!-- ═══ 批量用户主页采集页 ═══ -->
     <div id="page-batchuser" class="tab-page hidden fade-in">
         <div class="card p-6 mb-6">
-            <h2 class="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">📦 批量用户主页采集</h2>
+            <h2 class="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">📦 批量用户主页采集 → 改写</h2>
             <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-500 mb-2">用户主页链接（每行一个）</label>
                 <textarea id="batchUserUrls" rows="4" placeholder="https://www.xiaohongshu.com/user/profile/xxxxx&#10;https://www.xiaohongshu.com/user/profile/yyyyy" class="w-full text-sm"></textarea>
@@ -428,7 +548,8 @@
 
         <!-- 采集结果 -->
         <div id="batchUserResults" class="hidden">
-            <div class="grid grid-cols-3 gap-4 mb-6">
+            <!-- 统计卡片 -->
+            <div class="grid grid-cols-4 gap-4 mb-6">
                 <div class="card p-4 text-center">
                     <p class="text-xs text-gray-400 mb-1">采集用户</p>
                     <p id="batchUserStatUsers" class="stat-number text-2xl">0</p>
@@ -438,13 +559,140 @@
                     <p id="batchUserStatNotes" class="stat-number text-2xl">0</p>
                 </div>
                 <div class="card p-4 text-center">
+                    <p class="text-xs text-gray-400 mb-1">已选择</p>
+                    <p id="batchUserStatSelected" class="stat-number text-2xl text-xhs">0</p>
+                </div>
+                <div class="card p-4 text-center">
                     <p class="text-xs text-gray-400 mb-1">批量下载</p>
-                    <button onclick="downloadBatchUserImages()" class="btn-primary text-sm px-4 py-2 mt-1">📥 下载全部图片</button>
+                    <button onclick="downloadBatchUserImages()" class="btn-secondary text-sm px-4 py-2 mt-1">📥 下载图片</button>
                 </div>
             </div>
-            <div class="card p-6">
-                <h3 class="font-semibold text-gray-700 mb-4">📋 采集结果</h3>
-                <div id="batchUserResultList" class="space-y-4"></div>
+
+            <!-- 筛选工具栏 -->
+            <div class="card p-4 mb-4">
+                <div class="flex flex-wrap items-center gap-4">
+                    <label class="text-sm font-medium text-gray-600">🔍 筛选:</label>
+                    <div class="flex items-center gap-1">
+                        <span class="text-xs text-gray-400">最低点赞</span>
+                        <input type="number" id="filterMinLikes" value="0" min="0" class="w-20 text-sm">
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <span class="text-xs text-gray-400">最低收藏</span>
+                        <input type="number" id="filterMinCollects" value="0" min="0" class="w-20 text-sm">
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <span class="text-xs text-gray-400">最低评论</span>
+                        <input type="number" id="filterMinComments" value="0" min="0" class="w-20 text-sm">
+                    </div>
+                    <select id="filterSortBy" class="text-sm">
+                        <option value="likes_desc">点赞 高→低</option>
+                        <option value="likes_asc">点赞 低→高</option>
+                        <option value="collects_desc">收藏 高→低</option>
+                        <option value="comments_desc">评论 高→低</option>
+                    </select>
+                    <button onclick="filterAndSelect()" class="btn-secondary text-sm px-3 py-1.5">⚡ 筛选并全选</button>
+                    <button onclick="toggleSelectAll()" class="btn-secondary text-sm px-3 py-1.5">☑️ 全选/取消</button>
+                </div>
+            </div>
+
+            <!-- 笔记列表 + 批量改写按钮 -->
+            <div class="card p-6 mb-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-semibold text-gray-700">📋 采集结果</h3>
+                    <button onclick="startBatchRewrite()" id="btnBatchRewrite" class="btn-primary text-sm px-4 py-2 hidden">
+                        🤖 批量改写选中 (<span id="batchRewriteCount">0</span> 条)
+                    </button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-left text-xs text-gray-400 border-b">
+                                <th class="pb-2 w-8"><input type="checkbox" id="batchUserSelectAll" onchange="toggleSelectAll()"></th>
+                                <th class="pb-2">标题</th>
+                                <th class="pb-2 w-16 text-right">👍</th>
+                                <th class="pb-2 w-16 text-right">⭐</th>
+                                <th class="pb-2 w-16 text-right">💬</th>
+                                <th class="pb-2 w-20">类型</th>
+                            </tr>
+                        </thead>
+                        <tbody id="batchUserResultList"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ 批量改写控制区 ═══ -->
+        <div id="batchRewriteControl" class="card p-6 mb-6 hidden">
+            <h3 class="font-semibold text-gray-700 mb-4">🤖 批量改写设置</h3>
+            <div class="grid grid-cols-3 gap-4 mb-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">改写风格</label>
+                    <select id="batchRewriteStyle">
+                        <optgroup label="基础风格">
+                            <option>保持原风格</option>
+                            <option selected>种草带货风</option>
+                            <option>干货教程风</option>
+                            <option>情绪共鸣风</option>
+                            <option>测评对比风</option>
+                            <option>清单合集风</option>
+                        </optgroup>
+                        <optgroup label="进阶风格">
+                            <option>日常分享风</option>
+                            <option>避雷种草风</option>
+                            <option>懒人速成风</option>
+                            <option>学生党省钱风</option>
+                            <option>情感故事风</option>
+                            <option>专业成分党</option>
+                        </optgroup>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">
+                        改写比例 <span class="text-xhs font-bold" id="batchRatioValue">50%</span>
+                    </label>
+                    <input type="range" id="batchRewriteRatio" min="30" max="90" value="50" step="10"
+                        class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#ff2442]"
+                        oninput="document.getElementById('batchRatioValue').textContent = this.value + '%'">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500 mb-2">智能模式</label>
+                    <label class="flex items-center gap-2 p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100">
+                        <input type="checkbox" id="batchAgentDebate" checked class="w-5 h-5 accent-[#ff2442]">
+                        <div>
+                            <span class="font-medium text-sm text-gray-700">🤖 辩论模式</span>
+                            <p class="text-xs text-gray-400">3个AI并行改写，选最优</p>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            <button onclick="confirmBatchRewrite()" id="btnConfirmBatchRewrite" class="btn-primary w-full">
+                🚀 开始批量改写
+            </button>
+        </div>
+
+        <!-- 批量改写进度 -->
+        <div id="batchRewriteProgress" class="card p-6 mb-6 hidden">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-semibold text-gray-700" id="batchRewriteProgressTitle">改写中...</h3>
+                <span class="text-sm text-gray-400" id="batchRewriteProgressDetail"></span>
+            </div>
+            <div class="progress-bar mb-3">
+                <div id="batchRewriteProgressBar" class="progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- 批量改写结果 -->
+        <div id="batchRewriteResults" class="hidden">
+            <div class="card p-6 mb-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-semibold text-gray-700">📝 改写结果</h3>
+                    <div class="flex gap-2">
+                        <button onclick="batchProcessImages()" id="btnBatchProcessImages" class="text-sm px-4 py-2 rounded-xl bg-green-50 hover:bg-green-100 text-green-600 font-medium">🖼️ 批量处理图片</button>
+                        <button onclick="copyAllRewriteResults()" class="btn-primary text-sm px-4 py-2">📋 复制全部</button>
+                        <button onclick="downloadRewriteResults()" class="btn-secondary text-sm px-4 py-2">💾 导出 TXT</button>
+                    </div>
+                </div>
+                <div id="batchRewriteResultList" class="space-y-4"></div>
             </div>
         </div>
     </div>
@@ -479,57 +727,6 @@
         </div>
 
         <div class="space-y-6">
-
-            <!-- Chrome 插件 Cookie 采集 -->
-            <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4">
-                <div class="flex items-center gap-2 mb-3">
-                    <span class="text-lg">🧩</span>
-                    <div>
-                        <span class="text-sm font-bold text-blue-800">Chrome 插件采集（推荐）</span>
-                        <p class="text-xs text-blue-600">安装插件后，一键从浏览器采集 Cookie</p>
-                    </div>
-                </div>
-                <div class="flex items-start gap-3 mb-3">
-                    <span class="w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">1</span>
-                    <div class="flex-1">
-                        <p class="text-sm text-gray-700 font-medium">安装 Chrome 插件</p>
-                        <ol class="text-xs text-gray-500 mt-1 space-y-1 list-decimal ml-4">
-                            <li>打开 Chrome，地址栏输入 <code class="bg-gray-100 px-1 rounded text-[11px]">chrome://extensions</code></li>
-                            <li>右上角打开「开发者模式」</li>
-                            <li>点击「加载已解压的扩展程序」</li>
-                            <li>选择 <code class="bg-gray-100 px-1 rounded text-[11px]">chrome_extension</code> 文件夹</li>
-                        </ol>
-                        <p class="text-xs text-gray-400 mt-1">💡 插件在项目目录的 <code>chrome_extension/</code> 文件夹中</p>
-                        <a href="/api/plugin/download" target="_blank" class="inline-block mt-2 text-xs bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600 transition-colors">📥 下载插件 zip</a>
-                    </div>
-                </div>
-                <div class="flex items-start gap-3 mb-3">
-                    <span class="w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">2</span>
-                    <div class="flex-1">
-                        <p class="text-sm text-gray-700 font-medium">登录小红书 & 检测</p>
-                        <div class="flex items-center gap-2 mt-1">
-                            <button onclick="detectExtension()" class="btn-secondary text-xs px-3 py-1.5">🔍 检测插件状态</button>
-                            <span id="extDetectResult" class="text-xs text-gray-400"></span>
-                        </div>
-                    </div>
-                </div>
-                <div class="flex items-start gap-3">
-                    <span class="w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
-                    <div class="flex-1">
-                        <p class="text-sm text-gray-700 font-medium">一键采集 Cookie</p>
-                        <p class="text-xs text-gray-500 mt-1 mb-2">打开 <a href="https://www.xiaohongshu.com" target="_blank" class="text-blue-500 underline">xiaohongshu.com</a> 并登录，然后点击插件图标采集</p>
-                        <button onclick="collectFromExtension()" class="btn-primary text-xs px-4 py-2" style="display:inline-flex;align-items:center;gap:6px">
-                            🍪 通过插件采集
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="flex items-center gap-3">
-                <div class="flex-1 h-px bg-gray-200"></div>
-                <span class="text-xs text-gray-400">或手动粘贴</span>
-                <div class="flex-1 h-px bg-gray-200"></div>
-            </div>
 
             <!-- 手动粘贴 Cookie -->
             <div>
@@ -971,6 +1168,8 @@ function startFullProcess() {
 
     document.getElementById('progressArea').classList.remove('hidden');
     document.getElementById('resultArea').classList.add('hidden');
+    document.getElementById('debateArea').classList.add('hidden');
+    document.getElementById('debateCompareArea').classList.add('hidden');
     updateProgress(0, '准备开始...');
 
     document.getElementById('logPanel').classList.remove('hidden');
@@ -983,12 +1182,68 @@ function startFullProcess() {
         style: document.getElementById('rewriteStyle').value,
         model: document.getElementById('rewriteModel').value,
         image_level: document.getElementById('imageLevel').value,
+        ratio: document.getElementById('rewriteRatio') ? document.getElementById('rewriteRatio').value : 50,
+        debate: document.getElementById('agentDebate') ? document.getElementById('agentDebate').checked : true,
     });
 }
 
 socket.on('task_progress', data => {
     updateProgress(data.progress, data.message);
     addLog(data.message);
+
+    // 辩论进度处理
+    if (data.step === 'debate_start') {
+        document.getElementById('debateArea').classList.remove('hidden');
+        // 重置所有Agent状态
+        ['A', 'B', 'C'].forEach(k => {
+            const el = document.getElementById('agent-' + k);
+            el.style.opacity = '0.5';
+            el.querySelector('.agent-status-text').textContent = '等待中...';
+            el.querySelector('.agent-status-badge').className = 'agent-status-badge badge badge-yellow';
+            el.querySelector('.agent-status-badge').textContent = '排队';
+        });
+        document.getElementById('judgeStatus').classList.add('hidden');
+        document.getElementById('debateReasoning').classList.add('hidden');
+    }
+    if (data.step === 'agent_running' && data.agent) {
+        const el = document.getElementById('agent-' + data.agent);
+        if (el) {
+            el.style.opacity = '1';
+            el.querySelector('.agent-status-text').textContent = '改写中...';
+            el.querySelector('.agent-status-badge').className = 'agent-status-badge badge badge-red';
+            el.querySelector('.agent-status-badge').textContent = '🔄 进行中';
+        }
+    }
+    if (data.step === 'rewrite') {
+        // 所有Agent完成，进入评审
+        ['A', 'B', 'C'].forEach(k => {
+            const el = document.getElementById('agent-' + k);
+            if (el.style.opacity !== '1') {
+                el.style.opacity = '1';
+            }
+            el.querySelector('.agent-status-text').textContent = '改写完成';
+            el.querySelector('.agent-status-badge').className = 'agent-status-badge badge badge-green';
+            el.querySelector('.agent-status-badge').textContent = '✅ 完成';
+        });
+    }
+    if (data.step === 'rewrite' && data.progress === 45) {
+        // 这是辩论改写中的中间状态
+        ['A', 'B', 'C'].forEach(k => {
+            const el = document.getElementById('agent-' + k);
+            el.querySelector('.agent-status-text').textContent = '改写中...';
+        });
+    }
+    if (data.step === 'debate_result') {
+        document.getElementById('judgeStatus').classList.add('hidden');
+        document.getElementById('debateReasoning').classList.remove('hidden');
+        document.getElementById('debateReasoningText').textContent = data.debate_result?.reasoning || '';
+        // 保存辩论结果供task_complete使用
+        window._lastDebateResult = data.debate_result;
+    }
+    if (data.step === 'rewrite' && data.progress === 40) {
+        // 普通改写模式（debate_off），隐藏辩论区
+        document.getElementById('debateArea').classList.add('hidden');
+    }
 });
 
 socket.on('task_complete', data => {
@@ -1001,10 +1256,49 @@ socket.on('task_complete', data => {
     document.getElementById('originalTitle').textContent = result.original.title;
     document.getElementById('originalDesc').textContent = result.original.desc;
 
-    // 显示改写后
+    // 显示改写后（最优方案）
     document.getElementById('rewrittenTitle').textContent = result.rewritten.title;
     document.getElementById('rewrittenDesc').textContent = result.rewritten.desc;
     document.getElementById('rewriteProvider').textContent = result.rewritten.provider || 'AI';
+
+    // 显示辩论获胜者标签
+    if (result.rewritten.agent_name) {
+        document.getElementById('winnerBadge').textContent = `${result.rewritten.agent_emoji || ''} ${result.rewritten.agent_name} 方案`;
+    } else {
+        document.getElementById('winnerBadge').textContent = '';
+    }
+
+    // 处理辩论多方案对比
+    const debate = result.debate;
+    if (debate && debate.all_versions && debate.all_versions.length > 1) {
+        document.getElementById('debateCompareArea').classList.remove('hidden');
+        const scores = debate.scores || {};
+        debate.all_versions.forEach(v => {
+            const key = v.agent || v.agent_name;
+            let elId = '';
+            if (key === 'A' || (v.agent_name && v.agent_name.includes('爆款'))) elId = 'altA';
+            else if (key === 'B' || (v.agent_name && v.agent_name.includes('干货'))) elId = 'altB';
+            else if (key === 'C' || (v.agent_name && v.agent_name.includes('人设'))) elId = 'altC';
+            if (elId) {
+                const el = document.getElementById(elId);
+                el.querySelector('.alt-title').textContent = v.title || '';
+                el.querySelector('.alt-desc').textContent = v.desc || '';
+                // 显示分数
+                const agentKey = elId.replace('alt', '');
+                const s = scores[agentKey];
+                if (s && s.total) {
+                    el.querySelector('.score-badge').textContent = `总分: ${s.total}`;
+                }
+                // 如果是最优方案，高亮
+                if (v.agent === (debate.winner_agent || result.rewritten.agent)) {
+                    el.style.borderColor = '#ff2442';
+                    el.style.background = '#fff5f5';
+                }
+            }
+        });
+    } else {
+        document.getElementById('debateCompareArea').classList.add('hidden');
+    }
 
     // 保存图片数据
     currentImages.original = result.images_original || [];
@@ -1014,6 +1308,7 @@ socket.on('task_complete', data => {
     renderImages();
 
     document.getElementById('resultArea').classList.remove('hidden');
+    document.getElementById('debateArea').classList.add('hidden');
     loadStats();
 
     const btn = document.getElementById('btnStart');
@@ -1058,17 +1353,38 @@ function renderImages() {
     grid.innerHTML = '';
     currentImages.original.forEach((url, i) => {
         const processed = currentImages.processed[i];
-        const displayUrl = processed || url;
+        // CDN 图片需要走代理绕防盗链，本地路径直接用
+        let displayUrl = processed || url;
+        if (!processed && url && url.startsWith('http')) {
+            displayUrl = '/api/images/proxy?url=' + encodeURIComponent(url);
+        }
         const div = document.createElement('div');
         div.className = 'img-card border border-gray-100';
         div.innerHTML = `
-            <img src="${displayUrl}" alt="图片 ${i+1}" loading="lazy">
+            <img src="${displayUrl}" alt="图片 ${i+1}" loading="lazy" onerror="this.style.opacity='0.3'; this.alt='加载失败'">
             <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs py-1 px-2 text-center">
                 ${processed ? '✅ 已处理' : '原图'} #${i+1}
             </div>
         `;
+        // 点击放大
+        div.querySelector('img').addEventListener('click', function() {
+            showLightbox(displayUrl);
+        });
         grid.appendChild(div);
     });
+}
+
+function showLightbox(src) {
+    const existing = document.querySelector('.img-lightbox');
+    if (existing) existing.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'img-lightbox';
+    overlay.innerHTML = `<img src="${src}">`;
+    overlay.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    // ESC 关闭
+    const escHandler = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }};
+    document.addEventListener('keydown', escHandler);
 }
 
 function processAllImages() {
@@ -1407,6 +1723,9 @@ function resetForm() {
     document.getElementById('noteUrl').value = '';
     document.getElementById('progressArea').classList.add('hidden');
     document.getElementById('resultArea').classList.add('hidden');
+    document.getElementById('debateArea').classList.add('hidden');
+    document.getElementById('debateCompareArea').classList.add('hidden');
+    document.getElementById('winnerBadge').textContent = '';
     updateProgress(0, '');
 }
 
@@ -1712,25 +2031,6 @@ function fetchModelsForSwitch() {
     .catch(() => {
         document.getElementById('modelSwitchList').innerHTML = '<p class="text-sm text-gray-400 text-center py-4">获取模型列表失败</p>';
     });
-}
-
-// ── Chrome 插件检测 ──
-function detectExtension() {
-    const el = document.getElementById('extDetectResult');
-    el.textContent = '⏳ 检测中...';
-    el.className = 'text-xs text-gray-400';
-    // 插件是否安装无法直接检测，只能通过发送消息尝试
-    // 这里改为引导用户手动点击插件图标
-    setTimeout(() => {
-        el.innerHTML = '💡 请确认已安装插件并打开小红书登录，然后点击插件图标';
-        el.className = 'text-xs text-blue-600';
-    }, 500);
-}
-
-function collectFromExtension() {
-    const el = document.getElementById('extDetectResult');
-    el.innerHTML = '💡 请点击浏览器工具栏上的「小红书 Cookie 采集器」插件图标，<br>输入服务端地址后点击「一键采集 Cookie」';
-    el.className = 'text-xs text-blue-600';
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2045,9 +2345,10 @@ function viewKOLProfile(userId) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 功能 3: 批量用户主页采集
+// 功能 3: 批量用户主页采集 + 批量改写
 // ══════════════════════════════════════════════════════════════════════
 let _batchUserData = [];
+let _batchFlatNotes = [];  // 展平后的所有笔记 [{...fields, _user_idx, _note_idx, _selected}]
 
 function startBatchUserCollect() {
     const urls = document.getElementById('batchUserUrls').value.trim().split('\n').map(u => u.trim()).filter(Boolean);
@@ -2059,11 +2360,13 @@ function startBatchUserCollect() {
 
     document.getElementById('batchUserProgress').classList.remove('hidden');
     document.getElementById('batchUserResults').classList.add('hidden');
+    document.getElementById('batchRewriteControl').classList.add('hidden');
+    document.getElementById('batchRewriteProgress').classList.add('hidden');
+    document.getElementById('batchRewriteResults').classList.add('hidden');
     document.getElementById('batchUserProgressBar').style.width = '10%';
     document.getElementById('batchUserProgressTitle').textContent = `正在采集 ${urls.length} 个用户...`;
     document.getElementById('batchUserProgressDetail').textContent = '预计需要 ' + Math.ceil(urls.length * 3) + ' 秒';
 
-    // 使用 AbortController 设置超时（每个用户约3秒，总计 +30秒缓冲）
     const timeoutMs = Math.max(120000, urls.length * 5000 + 30000);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -2085,10 +2388,25 @@ function startBatchUserCollect() {
 
         if (data.success) {
             _batchUserData = data.data;
+            // 展平所有笔记，记录来源
+            _batchFlatNotes = [];
+            data.data.forEach((r, uidx) => {
+                (r.notes || []).forEach((n, nidx) => {
+                    _batchFlatNotes.push({
+                        ...n,
+                        _user_idx: uidx,
+                        _note_idx: nidx,
+                        _selected: false,
+                        _nickname: (r.user || {}).nickname || r.url || '',
+                    });
+                });
+            });
             document.getElementById('batchUserStatUsers').textContent = data.summary.success_users;
             document.getElementById('batchUserStatNotes').textContent = data.summary.total_notes;
-            renderBatchUserResults(data.data);
+            renderBatchUserTable();
             document.getElementById('batchUserResults').classList.remove('hidden');
+            document.getElementById('batchRewriteControl').classList.remove('hidden');
+            updateBatchRewriteCount();
             showToast(data.message);
         } else {
             showToast(data.message, 'error');
@@ -2107,33 +2425,291 @@ function startBatchUserCollect() {
     .finally(() => { btn.disabled = false; btn.innerHTML = '🚀 开始批量采集'; });
 }
 
-function renderBatchUserResults(results) {
-    const list = document.getElementById('batchUserResultList');
-    list.innerHTML = results.map(r => {
+function renderBatchUserTable() {
+    const tbody = document.getElementById('batchUserResultList');
+    const typeMap = {'normal': '图文', 'video': '视频'};
+    tbody.innerHTML = _batchFlatNotes.map((n, i) => `
+        <tr class="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+            <td class="py-2.5"><input type="checkbox" class="batch-note-cb" data-idx="${i}" onchange="onNoteCheckChange()"></td>
+            <td class="py-2.5">
+                <p class="font-medium text-sm truncate max-w-md" title="${n.title}">${n.title || '(无标题)'}</p>
+                <p class="text-xs text-gray-400 truncate max-w-md" title="${n.desc || ''}">${(n.desc || '').slice(0, 60)}${(n.desc || '').length > 60 ? '...' : ''}</p>
+            </td>
+            <td class="py-2.5 text-right text-sm ${parseInt(n.liked) >= 100 ? 'text-red-500 font-bold' : ''}">${n.liked}</td>
+            <td class="py-2.5 text-right text-sm">${n.collected}</td>
+            <td class="py-2.5 text-right text-sm">${n.comment}</td>
+            <td class="py-2.5 text-xs text-gray-400">${typeMap[n.type] || n.type || '-'}</td>
+        </tr>
+    `).join('');
+}
+
+function toggleSelectAll() {
+    const allCbs = document.querySelectorAll('.batch-note-cb');
+    const masterCb = document.getElementById('batchUserSelectAll');
+    const checked = masterCb ? masterCb.checked : !allCbs[0]?.checked;
+    allCbs.forEach(cb => {
+        cb.checked = checked;
+        const idx = parseInt(cb.dataset.idx);
+        _batchFlatNotes[idx]._selected = checked;
+    });
+    updateBatchRewriteCount();
+}
+
+function onNoteCheckChange() {
+    const cbs = document.querySelectorAll('.batch-note-cb');
+    let checkedCount = 0;
+    cbs.forEach(cb => {
+        const idx = parseInt(cb.dataset.idx);
+        _batchFlatNotes[idx]._selected = cb.checked;
+        if (cb.checked) checkedCount++;
+    });
+    const masterCb = document.getElementById('batchUserSelectAll');
+    if (masterCb) masterCb.checked = checkedCount === cbs.length && cbs.length > 0;
+    updateBatchRewriteCount();
+}
+
+function updateBatchRewriteCount() {
+    const count = _batchFlatNotes.filter(n => n._selected).length;
+    const el = document.getElementById('batchRewriteCount');
+    if (el) el.textContent = count;
+    const btn = document.getElementById('btnBatchRewrite');
+    if (btn) {
+        if (count > 0) {
+            btn.classList.remove('hidden');
+            btn.innerHTML = `🤖 批量改写选中 (<span id="batchRewriteCount">${count}</span> 条)`;
+        } else {
+            btn.classList.add('hidden');
+        }
+    }
+}
+
+function filterAndSelect() {
+    const minLikes = parseInt(document.getElementById('filterMinLikes').value) || 0;
+    const minCollects = parseInt(document.getElementById('filterMinCollects').value) || 0;
+    const minComments = parseInt(document.getElementById('filterMinComments').value) || 0;
+    const sortBy = document.getElementById('filterSortBy').value;
+
+    // 先排序
+    if (sortBy === 'likes_desc') _batchFlatNotes.sort((a, b) => parseInt(b.liked) - parseInt(a.liked));
+    else if (sortBy === 'likes_asc') _batchFlatNotes.sort((a, b) => parseInt(a.liked) - parseInt(b.liked));
+    else if (sortBy === 'collects_desc') _batchFlatNotes.sort((a, b) => parseInt(b.collected) - parseInt(a.collected));
+    else if (sortBy === 'comments_desc') _batchFlatNotes.sort((a, b) => parseInt(b.comment) - parseInt(a.comment));
+
+    // 再筛选
+    _batchFlatNotes.forEach(n => {
+        n._selected = parseInt(n.liked) >= minLikes && parseInt(n.collected) >= minCollects && parseInt(n.comment) >= minComments;
+    });
+
+    renderBatchUserTable();
+    // 同步 checkbox UI
+    document.querySelectorAll('.batch-note-cb').forEach(cb => {
+        const idx = parseInt(cb.dataset.idx);
+        cb.checked = _batchFlatNotes[idx]._selected;
+    });
+    const masterCb = document.getElementById('batchUserSelectAll');
+    const total = _batchFlatNotes.length;
+    const selected = _batchFlatNotes.filter(n => n._selected).length;
+    if (masterCb) masterCb.checked = selected === total && total > 0;
+    updateBatchRewriteCount();
+    showToast(`筛选完成: ${selected}/${total} 条符合条件`);
+}
+
+function startBatchRewrite() {
+    // 仅显示控制区
+    document.getElementById('batchRewriteControl').classList.remove('hidden');
+}
+
+function confirmBatchRewrite() {
+    const selected = _batchFlatNotes.filter(n => n._selected);
+    if (!selected.length) { showToast('请先选择要改写的笔记', 'error'); return; }
+
+    if (selected.length > 20) {
+        showToast('单次最多改写 20 条，请减少选择数量', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('btnConfirmBatchRewrite');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 改写中...';
+
+    document.getElementById('batchRewriteProgress').classList.remove('hidden');
+    document.getElementById('batchRewriteResults').classList.add('hidden');
+    document.getElementById('batchRewriteProgressBar').style.width = '0%';
+    document.getElementById('batchRewriteProgressTitle').textContent = `正在改写 ${selected.length} 条笔记...`;
+
+    const notesPayload = selected.map(n => ({
+        title: n.title || '',
+        desc: n.desc || '',
+        images: n.images || [],
+    }));
+
+    fetch('/api/note/batch_rewrite', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            notes: notesPayload,
+            style: document.getElementById('batchRewriteStyle').value,
+            ratio: parseInt(document.getElementById('batchRewriteRatio').value),
+            debate: document.getElementById('batchAgentDebate').checked,
+        }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById('batchRewriteProgressBar').style.width = '100%';
+        document.getElementById('batchRewriteProgressTitle').textContent = '改写完成！';
+        document.getElementById('batchRewriteProgressDetail').textContent = data.message || '';
+
+        if (data.success) {
+            renderBatchRewriteResults(selected, data.data);
+            document.getElementById('batchRewriteResults').classList.remove('hidden');
+            showToast(data.message);
+        } else {
+            showToast(data.message, 'error');
+        }
+    })
+    .catch(err => {
+        console.error('confirmBatchRewrite failed:', err);
+        showToast('批量改写失败: ' + err.message, 'error');
+        document.getElementById('batchRewriteProgressTitle').textContent = '改写失败';
+    })
+    .finally(() => { btn.disabled = false; btn.innerHTML = '🚀 开始批量改写'; });
+}
+
+function renderBatchRewriteResults(originals, results) {
+    const list = document.getElementById('batchRewriteResultList');
+    list.innerHTML = results.map((r, i) => {
+        const orig = originals[i] || {};
         const status = r.success ? '✅' : '❌';
-        const user = r.user || {};
-        const notes = r.notes || [];
+        const rw = r.rewritten || {};
+        const hasDebate = r.all_versions && r.all_versions.length > 1;
+
         return `
-        <div class="border border-gray-200 rounded-xl p-4">
-            <div class="flex items-center gap-3 mb-3">
+        <div class="border border-gray-200 rounded-xl p-4 hover:border-xhs/30 transition-colors">
+            <div class="flex items-center justify-between mb-3">
                 <span class="text-lg">${status}</span>
-                <div>
-                    <span class="font-semibold text-sm">${user.nickname || r.url}</span>
-                    <span class="text-xs text-gray-400 ml-2">${notes.length} 条笔记</span>
+                <div class="flex gap-2">
+                    <button onclick="copyRewriteSingle(${i})" class="text-xs px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600">📋 复制</button>
+                    ${hasDebate ? `<button onclick="toggleDebateDetail(${i})" class="text-xs px-3 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600">📊 辩论详情</button>` : ''}
                 </div>
             </div>
-            ${notes.length > 0 ? `
-            <div class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-                ${notes.slice(0, 10).map(n => `
-                    <div class="bg-gray-50 rounded-lg p-2 text-xs">
-                        <p class="font-medium truncate">${n.title}</p>
-                        <p class="text-gray-400">👍${n.liked} 💬${n.comment} ⭐${n.collected}</p>
-                    </div>
-                `).join('')}
-                ${notes.length > 10 ? `<div class="text-xs text-gray-400 text-center py-2">... 还有 ${notes.length - 10} 条</div>` : ''}
-            </div>` : `<p class="text-xs text-gray-400">${r.message || '未获取到笔记'}</p>`}
+            <div class="grid grid-cols-2 gap-4">
+                <div class="bg-gray-50 rounded-xl p-4">
+                    <p class="text-xs text-gray-400 mb-2 font-medium">原版</p>
+                    <p class="font-semibold text-sm text-gray-900 mb-2">${orig.title || '(无标题)'}</p>
+                    <p class="text-xs text-gray-600 whitespace-pre-wrap max-h-32 overflow-y-auto">${orig.desc || '(无正文)'}</p>
+                </div>
+                <div class="bg-xhs/5 rounded-xl p-4 border border-xhs/20">
+                    <p class="text-xs text-xhs mb-2 font-medium">改写版 ${r.success ? '' : '(失败)'}</p>
+                    <p class="font-semibold text-sm text-gray-900 mb-2">${rw.title || '-'}</p>
+                    <p class="text-xs text-gray-600 whitespace-pre-wrap max-h-32 overflow-y-auto">${rw.desc || '-'}</p>
+                </div>
+            </div>
+            ${hasDebate ? `
+            <div id="debateDetail${i}" class="hidden mt-3 pt-3 border-t border-gray-100">
+                <p class="text-xs text-gray-500 mb-2">🤖 辩论评审: ${r.reasoning || ''}</p>
+                <div class="grid grid-cols-3 gap-2">
+                    ${(r.all_versions || []).map(v => {
+                        const isWinner = v.agent === (r.all_versions.find(x => x.score === Math.max(...r.all_versions.map(y => y.score || 0)))?.agent);
+                        return `
+                        <div class="bg-gray-50 rounded-lg p-2 text-xs ${isWinner ? 'ring-2 ring-green-400 bg-green-50' : ''}">
+                            <p class="font-medium">${v.agent_emoji || ''} ${v.agent || 'AI'} ${isWinner ? '🏆' : ''}</p>
+                            <p class="font-medium text-gray-800 mt-1">${v.title || '(无标题)'}</p>
+                            <p class="text-gray-500 mt-1 whitespace-pre-wrap max-h-24 overflow-y-auto">${(v.desc || '(无正文)').slice(0, 300)}${(v.desc || '').length > 300 ? '...' : ''}</p>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>` : ''}
         </div>`;
     }).join('');
+
+    // 存到全局供复制/图片处理用
+    window._batchRewriteData = results.map((r, i) => ({
+        original: originals[i] || {},
+        rewritten: r.rewritten || {},
+        success: r.success,
+        images: originals[i]?.images || [],
+    }));
+}
+
+function batchProcessImages() {
+    // 收集所有原始图片 URL
+    const allImages = [];
+    (window._batchRewriteData || []).forEach(d => {
+        if (d.success && d.images && d.images.length) {
+            allImages.push(...d.images.filter(u => u));
+        }
+    });
+    if (!allImages.length) { showToast('没有图片需要处理', 'error'); return; }
+
+    const btn = document.getElementById('btnBatchProcessImages');
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 处理中...';
+
+    const level = document.getElementById('imageLevel') ? document.getElementById('imageLevel').value : 'medium';
+
+    fetch('/api/images/process', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ urls: allImages, level }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showToast(`✅ 图片处理完成 ${data.message}`);
+            // 下载处理后的图片
+            (data.data || []).forEach(d => {
+                if (d.processed) {
+                    const a = document.createElement('a');
+                    a.href = d.processed;
+                    a.download = d.filename || 'processed.jpg';
+                    a.click();
+                }
+            });
+        } else {
+            showToast(data.message || '图片处理失败', 'error');
+        }
+    })
+    .catch(err => showToast('图片处理失败: ' + err.message, 'error'))
+    .finally(() => { btn.disabled = false; btn.innerHTML = '🖼️ 批量处理图片'; });
+}
+
+function toggleDebateDetail(i) {
+    const el = document.getElementById('debateDetail' + i);
+    if (el) el.classList.toggle('hidden');
+}
+
+function copyRewriteSingle(i) {
+    const d = (window._batchRewriteData || [])[i];
+    if (!d) return;
+    const text = `【标题】${d.rewritten.title}\n\n【正文】${d.rewritten.desc}`;
+    navigator.clipboard.writeText(text).then(() => showToast('✅ 已复制'));
+}
+
+function copyAllRewriteResults() {
+    const data = window._batchRewriteData || [];
+    const items = data.filter(d => d.success);
+    if (!items.length) { showToast('没有可复制的结果', 'error'); return; }
+    const text = items.map((d, i) =>
+        `═══ 第${i+1}篇 ═══\n【标题】${d.rewritten.title}\n\n【正文】${d.rewritten.desc}`
+    ).join('\n\n');
+    navigator.clipboard.writeText(text).then(() => showToast(`✅ 已复制 ${items.length} 篇改写结果`));
+}
+
+function downloadRewriteResults() {
+    const data = window._batchRewriteData || [];
+    const items = data.filter(d => d.success);
+    if (!items.length) { showToast('没有可导出的结果', 'error'); return; }
+    const text = items.map((d, i) =>
+        `══════ 第${i+1}篇 ══════\n【原标题】${d.original.title}\n【改写标题】${d.rewritten.title}\n\n【原正文】${d.original.desc}\n\n【改写正文】${d.rewritten.desc}`
+    ).join('\n\n\n');
+    const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `改写结果_${new Date().toISOString().slice(0,10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`✅ 已导出 ${items.length} 篇`);
 }
 
 function downloadBatchUserImages() {
