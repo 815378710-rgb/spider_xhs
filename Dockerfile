@@ -13,9 +13,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制v2后端依赖（FastAPI版）
+# Python依赖（FastAPI版）
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# JS签名依赖（crypto-js, jsdom）
+COPY package.json package-lock.json* ./
+RUN npm install 2>/dev/null || npm install --legacy-peer-deps
 
 # 复制整个项目
 COPY . .
