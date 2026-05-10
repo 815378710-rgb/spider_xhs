@@ -2,10 +2,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 配置 DNS（解决 Docker build 时 DNS 解析失败）
-RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
-    echo "nameserver 114.114.114.114" >> /etc/resolv.conf
-
 # 系统依赖：Node.js（签名算法需要）+ OpenCV 依赖
 RUN apt-get update && apt-get install -y \
     curl \
@@ -17,8 +13,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# 先复制依赖文件，利用 Docker 缓存
-COPY requirements.txt ./
+# 复制v2后端依赖（FastAPI版）
+COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制整个项目
@@ -29,6 +25,6 @@ ENV NODE_PATH=/app/node_modules
 ENV PYTHONUNBUFFERED=1
 ENV NODE_ENV=production
 
-EXPOSE 5000
+EXPOSE 5005
 
 CMD ["python", "backend/main.py"]
