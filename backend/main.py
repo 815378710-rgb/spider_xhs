@@ -27,6 +27,8 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await init_db()
     logger.info("✅ Database initialized")
+    # Initialize admin user and license keys
+    await _init_admin_and_keys()
     # Start scheduler
     from services.scheduler import start_scheduler
     await start_scheduler()
@@ -38,10 +40,50 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 土豆小红书助手 backend stopped")
 
 
+async def _init_admin_and_keys():
+    """Create default admin user and initial license keys if needed."""
+    from sqlalchemy import select, func
+    from core.database import async_session
+    from models.user import User, LicenseKey
+    from core.security import hash_password, generate_license_key
+
+    async with async_session() as db:
+        # Check if admin exists
+        result = await db.execute(select(User).where(User.role == "admin"))
+        admin = result.scalar_one_or_none()
+        if not admin:
+            admin = User(
+                username="admin",
+                password_hash=hash_password("admin123"),
+                role="admin",
+                status="active",
+            )
+            db.add(admin)
+            await db.flush()
+            logger.info("✅ Created default admin user (admin / admin123)")
+
+        # Generate initial license keys if none exist
+        count = (await db.execute(select(func.count()).select_from(LicenseKey))).scalar() or 0
+        if count == 0:
+            admin_id = admin.id if admin else 1
+            keys = []
+            for _ in range(10):
+                key = generate_license_key()
+                lk = LicenseKey(key=key, valid_days=30, created_by=admin_id, status="unused")
+                db.add(lk)
+                keys.append(key)
+            await db.flush()
+            logger.info(f"✅ Generated 10 initial license keys:")
+            for k in keys:
+                logger.info(f"   {k}")
+
+        await db.commit()
+
+
 app = FastAPI(
     title="土豆小红书助手 API",
     description="土豆小红书助手 API",
-    version="2.0.0",
+    version="2.2.0",
     lifespan=lifespan,
 )
 
@@ -61,7 +103,7 @@ from routers import (
     publish, automation, monitor, analytics,
     kol, qianfan, anti_crawl, proxy, tasks, notifications,
     quick_work, logs, content_check, ai_check, crawl_monitor,
-    topic_recommend,
+    topic_recommend, admin,
 )
 
 router_prefix_map = [
@@ -92,6 +134,7 @@ router_prefix_map = [
     (ai_check.router,      "/api/ai-check",       "AI检测"),
     (crawl_monitor.router, "/api/crawl-monitor",  "反爬监控"),
     (topic_recommend.router, "/api/topics",       "选题推荐"),
+    (admin.router,          "/api/admin",         "管理员"),
 ]
 
 for router, prefix, tag in router_prefix_map:
@@ -101,7 +144,7 @@ for router, prefix, tag in router_prefix_map:
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "2.2.0"}
 
 
 # ── Serve data files (images, processed) ─────────────────────────────────────
@@ -123,9 +166,19 @@ if os.path.isdir(FRONTEND_DIST):
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """Serve React SPA for all non-API routes."""
-        file_path = os.path.join(FRONTEND_DIST, full_path)
-        if os.path.isfile(file_path):
-            return FileResponse(file_path)
+        from pathlib import Path
+        
+        # 防止路径遍历攻击
+        static_dir = Path(FRONTEND_DIST).resolve()
+        requested_path = (static_dir / full_path).resolve()
+        
+        # 确保请求的路径在FRONTEND_DIST目录内
+        if not str(requested_path).startswith(str(static_dir)):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Forbidden")
+        
+        if requested_path.is_file():
+            return FileResponse(requested_path)
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
 
 
