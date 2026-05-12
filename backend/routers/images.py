@@ -104,8 +104,22 @@ async def get_styles(user=Depends(get_current_user)):
 
 
 @router.get("/proxy")
-async def image_proxy(url: str):
+async def image_proxy(url: str, user=Depends(get_current_user)):
     """Proxy XHS CDN images to bypass CORS."""
+    from urllib.parse import urlparse
+    
+    # P0-2 修复：验证URL域名白名单，防止SSRF攻击
+    ALLOWED_DOMAINS = ["xhscdn.com", "xiaohongshu.com", "xhslink.com"]
+    
+    try:
+        parsed = urlparse(url)
+        if not any(domain in parsed.netloc for domain in ALLOWED_DOMAINS):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Forbidden: URL not allowed")
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Invalid URL: {str(e)}")
+    
     import requests as req
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
