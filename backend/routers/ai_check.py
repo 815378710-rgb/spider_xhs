@@ -53,7 +53,7 @@ def _get_backend(req):
 
 
 @router.post("/detect")
-async def detect_ai_trace(req: DetectRequest):
+async def detect_ai_trace(req: DetectRequest, user=Depends(get_current_user)):
     """AI味检测"""
     from utils.ai_detector import detect_ai_trace as _detect
     result = _detect(req.text)
@@ -73,7 +73,7 @@ async def remove_ai_trace(req: RemoveRequest, user=Depends(get_current_user)):
 
 
 @router.post("/originality")
-async def estimate_originality(req: OriginalityRequest):
+async def estimate_originality(req: OriginalityRequest, user=Depends(get_current_user)):
     """原创度评估"""
     from utils.ai_detector import estimate_originality as _estimate
     result = _estimate(req.text)
