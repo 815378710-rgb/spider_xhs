@@ -2,6 +2,7 @@
 登录路由 — 浏览器扫码登录 + 手机登录
 """
 import time
+import asyncio
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
@@ -27,9 +28,8 @@ async def browser_login_start(user=Depends(get_current_user)):
         from services.browser_login import create_browser_session, cleanup_old_sessions
         cleanup_old_sessions()
         session = create_browser_session()
-        # Brief wait for the browser to start
-        import time as _time
-        _time.sleep(3)
+        # P0-4 修复：使用await asyncio.sleep代替time.sleep，避免阻塞事件循环
+        await asyncio.sleep(3)
         status = session.get_status()
         return {
             "success": True,
