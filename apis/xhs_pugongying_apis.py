@@ -15,7 +15,10 @@ class PuGongYingAPI:
         api = '/api/solar/cooperator/content/tag_tree'
         headers = generate_pugongying_headers(cookies['a1'], api)
         response = requests.get(self.base_url + api, headers=headers, cookies=cookies, timeout=REQUEST_TIMEOUT)
-        distribution_category = response.json()["data"]
+        resp_json = response.json()
+        distribution_category = resp_json.get("data", [])
+        if isinstance(distribution_category, str):
+            raise Exception(f"蒲公英API返回异常: {distribution_category[:100]}（可能Cookie缺少蒲公英权限）")
         return distribution_category
 
     def choose_categories(self, cookies):

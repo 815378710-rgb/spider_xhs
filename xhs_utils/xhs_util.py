@@ -1,192 +1,192 @@
-import json
-import math
-import os
-import random
-import time
-from urllib.parse import urlencode
-
-import execjs
-
-# === execjs Node.js 运行时补丁（唯一入口）===
-# 解决 Windows Git Bash 环境下 execjs 无法自动发现 node 的问题
-# Linux/Docker 中 node 通常在 PATH 里，自动发现，此补丁不生效
-def _ensure_node_runtime():
-    # 设置 NODE_PATH 让 node 能找到 crypto-js 等依赖
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'node_modules'))
-    if os.path.isdir(project_root) and not os.environ.get('NODE_PATH'):
-        os.environ['NODE_PATH'] = project_root
-
-    # Windows 特殊路径：手动注册 Node 运行时
-    for candidate in (r"D:\node.exe", r"C:\Program Files\nodejs\node.exe"):
-        if os.path.exists(candidate):
-            from execjs._external_runtime import ExternalRuntime
-            for name, rt in execjs._runtimes._runtimes:
-                if name == "Node" and rt.is_available():
-                    return
-            node_rt = ExternalRuntime("Node", [candidate], execjs._runner_sources.Node)
-            node_rt._available = True
-            execjs._runtimes._runtimes.insert(0, ("Node", node_rt))
-            return
-
-_ensure_node_runtime()
-# === end patch ===
-
-from xhs_utils.cookie_util import trans_cookies
-
-_STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-
-
-def _compile_static_js(filename):
-    with open(os.path.join(_STATIC_DIR, filename), 'r', encoding='utf-8') as f:
-        return execjs.compile(f.read(), cwd=_PROJECT_ROOT)
-
-
-_JS_CACHE = {}
-
-
-def _get_static_js(filename):
-    if filename not in _JS_CACHE:
-        _JS_CACHE[filename] = _compile_static_js(filename)
-    return _JS_CACHE[filename]
-
-def generate_x_b3_traceid(len=16):
-    x_b3_traceid = ""
-    for t in range(len):
-        x_b3_traceid += "abcdef0123456789"[math.floor(16 * random.random())]
-    return x_b3_traceid
-
-_BASE36_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz"
-
-def _int_to_base36(value):
-    if value == 0:
-        return "0"
-    result = ""
-    while value:
-        value, remainder = divmod(value, 36)
-        result = _BASE36_CHARS[remainder] + result
-    return result
-
-def generate_search_id(root_search_id=None):
-    if root_search_id:
-        return root_search_id
-    timestamp_ms = int(time.time() * 1000)
-    random_part = math.ceil(0x7ffffffe * random.random())
-    return _int_to_base36((timestamp_ms << 64) + random_part)
-
-def generate_search_request_id():
-    timestamp_ms = int(time.time() * 1000)
-    random_part = math.ceil(0x7ffffffe * random.random())
-    return f"{random_part}-{timestamp_ms}"
-
-def generate_xs_xs_common(a1, api, data='', method='POST'):
-    ret = _get_static_js('xhs_main_260411.js').call('get_request_headers_params', api, data, a1, method)
-    xs, xt, xs_common = ret['xs'], ret['xt'], ret['xs_common']
-    return xs, xt, xs_common
-
-def generate_xs(a1, api, data=''):
-    ret = _get_static_js('xhs_main_260411.js').call('get_xs', api, data, a1)
-    xs, xt = ret['X-s'], ret['X-t']
-    return xs, xt
-
-def generate_xray_traceid():
-    return _get_static_js('xhs_xray.js').call('traceId')
-
-def generate_x_rap_param(api, data, app_id=None):
-    if isinstance(data, (dict, list)):
-        data = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
-    return _get_static_js('xhs_rap.js').call('generate_x_rap_param', api, data or '', app_id)
-
-_FINGERPRINT_CACHE = None
-
-def _get_fingerprint():
-    global _FINGERPRINT_CACHE
-    if _FINGERPRINT_CACHE is None:
-        try:
-            from utils.fingerprint import get_fingerprint
-            _FINGERPRINT_CACHE = get_fingerprint()
-        except ImportError:
-            _FINGERPRINT_CACHE = None
-    return _FINGERPRINT_CACHE
-
-def get_common_headers():
-    fp = _get_fingerprint()
-    ua = fp.get_user_agent() if fp else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
-    sec_ch_ua = fp.get_sec_ch_ua() if fp else '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"'
-    sec_ch_ua_platform = fp.get_sec_ch_ua_platform() if fp else '"Windows"'
-    return {
-        "authority": "www.xiaohongshu.com",
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "accept-language": "zh-CN,zh;q=0.9",
-        "cache-control": "no-cache",
-        "pragma": "no-cache",
-        "referer": "https://www.xiaohongshu.com/",
-        "sec-ch-ua": sec_ch_ua,
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": sec_ch_ua_platform,
-        "sec-fetch-dest": "document",
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-site": "same-origin",
-        "sec-fetch-user": "?1",
-        "upgrade-insecure-requests": "1",
-        "user-agent": ua,
-    }
-def get_request_headers_template():
-    fp = _get_fingerprint()
-    ua = fp.get_user_agent() if fp else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
-    sec_ch_ua = fp.get_sec_ch_ua() if fp else '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"'
-    sec_ch_ua_platform = fp.get_sec_ch_ua_platform() if fp else '"Windows"'
-    return {
-        "authority": "edith.xiaohongshu.com",
-        "accept": "application/json, text/plain, */*",
-        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "cache-control": "no-cache",
-        "content-type": "application/json;charset=UTF-8",
-        "origin": "https://www.xiaohongshu.com",
-        "pragma": "no-cache",
-        "referer": "https://www.xiaohongshu.com/",
-        "sec-ch-ua": sec_ch_ua,
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": sec_ch_ua_platform,
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-site",
-        "user-agent": ua,
-        "x-b3-traceid": "",
-        "x-mns": "unload",
-        "x-s": "",
-        "x-s-common": "",
-        "x-t": "",
-        "x-xray-traceid": generate_xray_traceid()
-    }
-
-def generate_headers(a1, api, data='', method='POST'):
-    xs, xt, xs_common = generate_xs_xs_common(a1, api, data, method)
-    x_b3_traceid = generate_x_b3_traceid()
-    headers = get_request_headers_template()
-    headers['x-s'] = xs
-    headers['x-t'] = str(xt)
-    headers['x-s-common'] = xs_common
-    headers['x-b3-traceid'] = x_b3_traceid
-    if data:
-        data = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
-    return headers, data
-
-def generate_request_params(cookies_str, api, data='', method='POST'):
-    cookies = trans_cookies(cookies_str)
-    if 'a1' not in cookies or not cookies['a1']:
-        from xhs_utils.common_util import generate_a1
-        cookies['a1'] = generate_a1()
-        print(f"[generate_request_params] cookies 中缺少 a1, 已自动生成: {cookies['a1'][:16]}...")
-    a1 = cookies['a1']
-    headers, data = generate_headers(a1, api, data, method)
-    return headers, cookies, data
-
-def splice_str(api, params):
-    return api + '?' + urlencode(
-        {key: '' if value is None else value for key, value in params.items()},
-        doseq=True
-    )
-
-if __name__ == '__main__':
-    print(generate_search_id())
+import json
+import math
+import os
+import random
+import time
+from urllib.parse import urlencode
+
+import execjs
+
+# === execjs Node.js 运行时补丁（唯一入口）===
+# 解决 Windows Git Bash 环境下 execjs 无法自动发现 node 的问题
+# Linux/Docker 中 node 通常在 PATH 里，自动发现，此补丁不生效
+def _ensure_node_runtime():
+    # 设置 NODE_PATH 让 node 能找到 crypto-js 等依赖
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'node_modules'))
+    if os.path.isdir(project_root) and not os.environ.get('NODE_PATH'):
+        os.environ['NODE_PATH'] = project_root
+
+    # Windows 特殊路径：手动注册 Node 运行时
+    for candidate in (r"D:\node.exe", r"C:\Program Files\nodejs\node.exe"):
+        if os.path.exists(candidate):
+            from execjs._external_runtime import ExternalRuntime
+            for name, rt in execjs._runtimes._runtimes:
+                if name == "Node" and rt.is_available():
+                    return
+            node_rt = ExternalRuntime("Node", [candidate], execjs._runner_sources.Node)
+            node_rt._available = True
+            execjs._runtimes._runtimes.insert(0, ("Node", node_rt))
+            return
+
+_ensure_node_runtime()
+# === end patch ===
+
+from xhs_utils.cookie_util import trans_cookies
+
+_STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static'))
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+def _compile_static_js(filename):
+    with open(os.path.join(_STATIC_DIR, filename), 'r', encoding='utf-8') as f:
+        return execjs.compile(f.read(), cwd=_PROJECT_ROOT)
+
+
+_JS_CACHE = {}
+
+
+def _get_static_js(filename):
+    if filename not in _JS_CACHE:
+        _JS_CACHE[filename] = _compile_static_js(filename)
+    return _JS_CACHE[filename]
+
+def generate_x_b3_traceid(len=16):
+    x_b3_traceid = ""
+    for t in range(len):
+        x_b3_traceid += "abcdef0123456789"[math.floor(16 * random.random())]
+    return x_b3_traceid
+
+_BASE36_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+def _int_to_base36(value):
+    if value == 0:
+        return "0"
+    result = ""
+    while value:
+        value, remainder = divmod(value, 36)
+        result = _BASE36_CHARS[remainder] + result
+    return result
+
+def generate_search_id(root_search_id=None):
+    if root_search_id:
+        return root_search_id
+    timestamp_ms = int(time.time() * 1000)
+    random_part = math.ceil(0x7ffffffe * random.random())
+    return _int_to_base36((timestamp_ms << 64) + random_part)
+
+def generate_search_request_id():
+    timestamp_ms = int(time.time() * 1000)
+    random_part = math.ceil(0x7ffffffe * random.random())
+    return f"{random_part}-{timestamp_ms}"
+
+def generate_xs_xs_common(a1, api, data='', method='POST'):
+    ret = _get_static_js('xhs_main_260411.js').call('get_request_headers_params', api, data, a1, method)
+    xs, xt, xs_common = ret['xs'], ret['xt'], ret['xs_common']
+    return xs, xt, xs_common
+
+def generate_xs(a1, api, data=''):
+    ret = _get_static_js('xhs_main_260411.js').call('get_xs', api, data, a1)
+    xs, xt = ret['X-s'], ret['X-t']
+    return xs, xt
+
+def generate_xray_traceid():
+    return _get_static_js('xhs_xray.js').call('traceId')
+
+def generate_x_rap_param(api, data, app_id=None):
+    if isinstance(data, (dict, list)):
+        data = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
+    return _get_static_js('xhs_rap.js').call('generate_x_rap_param', api, data or '', app_id)
+
+_FINGERPRINT_CACHE = None
+
+def _get_fingerprint():
+    global _FINGERPRINT_CACHE
+    if _FINGERPRINT_CACHE is None:
+        try:
+            from utils.fingerprint import get_fingerprint
+            _FINGERPRINT_CACHE = get_fingerprint()
+        except ImportError:
+            _FINGERPRINT_CACHE = None
+    return _FINGERPRINT_CACHE
+
+def get_common_headers():
+    fp = _get_fingerprint()
+    ua = fp.get_user_agent() if fp else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+    sec_ch_ua = fp.get_sec_ch_ua() if fp else '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"'
+    sec_ch_ua_platform = fp.get_sec_ch_ua_platform() if fp else '"Windows"'
+    return {
+        "authority": "www.xiaohongshu.com",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "accept-language": "zh-CN,zh;q=0.9",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "referer": "https://www.xiaohongshu.com/",
+        "sec-ch-ua": sec_ch_ua,
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": sec_ch_ua_platform,
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1",
+        "user-agent": ua,
+    }
+def get_request_headers_template():
+    fp = _get_fingerprint()
+    ua = fp.get_user_agent() if fp else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+    sec_ch_ua = fp.get_sec_ch_ua() if fp else '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"'
+    sec_ch_ua_platform = fp.get_sec_ch_ua_platform() if fp else '"Windows"'
+    return {
+        "authority": "edith.xiaohongshu.com",
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+        "cache-control": "no-cache",
+        "content-type": "application/json;charset=UTF-8",
+        "origin": "https://www.xiaohongshu.com",
+        "pragma": "no-cache",
+        "referer": "https://www.xiaohongshu.com/",
+        "sec-ch-ua": sec_ch_ua,
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": sec_ch_ua_platform,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "user-agent": ua,
+        "x-b3-traceid": "",
+        "x-mns": "unload",
+        "x-s": "",
+        "x-s-common": "",
+        "x-t": "",
+        "x-xray-traceid": generate_xray_traceid()
+    }
+
+def generate_headers(a1, api, data='', method='POST'):
+    xs, xt, xs_common = generate_xs_xs_common(a1, api, data, method)
+    x_b3_traceid = generate_x_b3_traceid()
+    headers = get_request_headers_template()
+    headers['x-s'] = xs
+    headers['x-t'] = str(xt)
+    headers['x-s-common'] = xs_common
+    headers['x-b3-traceid'] = x_b3_traceid
+    if data:
+        data = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
+    return headers, data
+
+def generate_request_params(cookies_str, api, data='', method='POST'):
+    cookies = trans_cookies(cookies_str)
+    if 'a1' not in cookies or not cookies['a1']:
+        from xhs_utils.common_util import generate_a1
+        cookies['a1'] = generate_a1()
+        print(f"[generate_request_params] cookies 中缺少 a1, 已自动生成: {cookies['a1'][:16]}...")
+    a1 = cookies['a1']
+    headers, data = generate_headers(a1, api, data, method)
+    return headers, cookies, data
+
+def splice_str(api, params):
+    return api + '?' + urlencode(
+        {key: '' if value is None else value for key, value in params.items()},
+        doseq=True
+    )
+
+if __name__ == '__main__':
+    print(generate_search_id())

@@ -37,7 +37,21 @@ async def update_config(req: ConfigUpdate, user=Depends(get_current_user)):
     """Update configuration."""
     update_kwargs = {}
     if req.cookies is not None:
-        update_kwargs["COOKIES"] = req.cookies
+        # Clean up cookie string: remove newlines, extra spaces, and validate format
+        cookies_str = req.cookies.strip()
+        # Remove newlines and carriage returns
+        cookies_str = cookies_str.replace('\n', '').replace('\r', '')
+        # Remove extra spaces around semicolons
+        import re
+        cookies_str = re.sub(r'\s*;\s*', '; ', cookies_str)
+        cookies_str = re.sub(r'\s+', ' ', cookies_str).strip()
+        
+        # Validate that it looks like a cookie string
+        if cookies_str and '=' in cookies_str:
+            update_kwargs["COOKIES"] = cookies_str
+        else:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Cookie 格式无效，请检查后重试")
     if req.llm_provider is not None:
         update_kwargs["LLM_PROVIDER"] = req.llm_provider
     if req.llm_api_key is not None:
@@ -72,10 +86,10 @@ async def test_cookie(user=Depends(get_current_user)):
 async def test_ai(body: dict = {}, user=Depends(get_current_user)):
     """Test AI model connection."""
     from utils.rewrite import create_backend
-    provider = body.get("provider", settings.LLM_PROVIDER)
-    api_key = body.get("api_key", settings.LLM_API_KEY)
-    model = body.get("model", settings.LLM_MODEL)
-    base_url = body.get("base_url", settings.LLM_BASE_URL)
+    provider = body.get("llm_provider") or body.get("provider") or settings.LLM_PROVIDER
+    api_key = body.get("llm_api_key") or body.get("api_key") or settings.LLM_API_KEY
+    model = body.get("llm_model") or body.get("model") or settings.LLM_MODEL
+    base_url = body.get("llm_base_url") or body.get("base_url") or settings.LLM_BASE_URL
 
     if not api_key:
         return {"success": False, "message": "API Key 未配置"}
@@ -98,9 +112,9 @@ async def test_ai(body: dict = {}, user=Depends(get_current_user)):
 async def list_models(body: dict = {}, user=Depends(get_current_user)):
     """List available models from provider API."""
     import requests as req
-    provider = body.get("provider", "mimo")
-    api_key = body.get("api_key", "")
-    base_url = body.get("base_url", "")
+    provider = body.get("llm_provider") or body.get("provider") or "mimo"
+    api_key = body.get("llm_api_key") or body.get("api_key") or ""
+    base_url = body.get("llm_base_url") or body.get("base_url") or ""
 
     if not api_key:
         return {"success": False, "message": "API Key 未配置", "models": []}

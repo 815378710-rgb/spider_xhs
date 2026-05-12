@@ -13,7 +13,11 @@ class QianFanAPI:
             "types": "content_category,distribution_category,user_design_tag,content_tag"
         }
         response = requests.get(url, headers=headers, cookies=cookies, params=params, timeout=REQUEST_TIMEOUT)
-        distribution_category = response.json()["data"]['distributor_tag_map']["distribution_category"]
+        resp_json = response.json()
+        data = resp_json.get("data", {})
+        if isinstance(data, str):
+            raise Exception(f"千帆API返回异常: {data[:100]}（可能Cookie缺少蒲公英权限）")
+        distribution_category = data.get('distributor_tag_map', {}).get("distribution_category", [])
         return distribution_category
 
     def choose_categories(self, cookies):

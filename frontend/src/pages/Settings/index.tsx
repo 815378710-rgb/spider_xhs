@@ -9,6 +9,7 @@ export default function SettingsPage() {
   const [form] = Form.useForm()
   const [aiForm] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [cookieTesting, setCookieTesting] = useState(false)
   const [aiTesting, setAiTesting] = useState(false)
   const [models, setModels] = useState<any[]>([])
 
@@ -21,28 +22,44 @@ export default function SettingsPage() {
         llm_provider: d.llm_provider, llm_api_key: d.llm_api_key,
         llm_model: d.llm_model, llm_base_url: d.llm_base_url,
       })
-    } catch {}
+    } catch (e: any) {
+      message.error('加载配置失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   useEffect(() => { load() }, [])
 
   const onSaveCookie = async (values: any) => {
     setLoading(true)
-    await client.post('/config', values)
-    message.success('Cookie已保存')
+    try {
+      await client.post('/config', values)
+      message.success('Cookie已保存')
+    } catch (e: any) {
+      message.error('保存失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
     setLoading(false)
   }
 
   const onTestCookie = async () => {
-    const r = await client.post('/config/test-cookie')
-    if (r.data.success) message.success(r.data.message)
-    else message.warning(r.data.message)
+    setCookieTesting(true)
+    try {
+      const r = await client.post('/config/test-cookie')
+      if (r.data.success) message.success(r.data.message)
+      else message.warning(r.data.message)
+    } catch (e: any) {
+      message.error('Cookie测试失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
+    setCookieTesting(false)
   }
 
   const onSaveAI = async (values: any) => {
     setLoading(true)
-    await client.post('/config', values)
-    message.success('AI配置已保存')
+    try {
+      await client.post('/config', values)
+      message.success('AI配置已保存')
+    } catch (e: any) {
+      message.error('保存失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
     setLoading(false)
   }
 
@@ -52,8 +69,10 @@ export default function SettingsPage() {
       const values = aiForm.getFieldsValue()
       const r = await client.post('/config/test-ai', values)
       if (r.data.success) message.success(r.data.message)
-      else message.warning(r.data.message)
-    } catch {}
+      else message.warning(r.data.message || '测试失败，请检查配置')
+    } catch (e: any) {
+      message.error('AI测试失败: ' + (e.response?.data?.message || e.message || '网络错误'))
+    }
     setAiTesting(false)
   }
 
@@ -63,9 +82,18 @@ export default function SettingsPage() {
       const r = await client.post('/config/models', values)
       if (r.data.success) {
         setModels(r.data.models || [])
-        message.success(`获取到 ${r.data.models?.length || 0} 个模型`)
+        const count = r.data.models?.length || 0
+        if (count > 0) {
+          message.success(`获取到 ${count} 个模型`)
+        } else {
+          message.warning(r.data.message || '未获取到模型，请检查配置')
+        }
+      } else {
+        message.warning(r.data.message || '获取模型列表失败')
       }
-    } catch {}
+    } catch (e: any) {
+      message.error('获取模型列表失败: ' + (e.response?.data?.message || e.message || '网络错误'))
+    }
   }
 
   return (
@@ -83,7 +111,7 @@ export default function SettingsPage() {
                 </Form.Item>
                 <Space>
                   <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={loading}>保存</Button>
-                  <Button onClick={onTestCookie}>测试有效性</Button>
+                  <Button onClick={onTestCookie} loading={cookieTesting}>测试有效性</Button>
                 </Space>
               </Form>
             </Card>

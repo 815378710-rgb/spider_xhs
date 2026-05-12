@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { Card, Row, Col, Statistic, Typography, Table, Tag, Button, Space, List, Empty } from 'antd'
+import { Card, Row, Col, Statistic, Typography, Tag, Button, Space, List, Empty, Divider } from 'antd'
 import {
   FileTextOutlined, SendOutlined, CheckCircleOutlined, ClockCircleOutlined,
-  RocketOutlined, SearchOutlined, LinkOutlined, ArrowRightOutlined,
+  RocketOutlined, SearchOutlined, ArrowRightOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+import { Line, Pie } from '@ant-design/charts'
 import client from '../../api/client'
 
 const { Title, Text, Paragraph } = Typography
@@ -14,19 +15,25 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<any>({})
   const [recentNotes, setRecentNotes] = useState<any[]>([])
   const [pendingTasks, setPendingTasks] = useState<any[]>([])
+  const [trendData, setTrendData] = useState<any>({})
+  const [categoryData, setCategoryData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [dashRes, notesRes, publishRes] = await Promise.allSettled([
+        const [dashRes, notesRes, publishRes, trendRes, catRes] = await Promise.allSettled([
           client.get('/analytics/dashboard'),
           client.get('/content', { params: { page: 1 } }),
           client.get('/publish', { params: { page: 1 } }),
+          client.get('/analytics/trend', { params: { days: 7 } }),
+          client.get('/analytics/category-dist'),
         ])
         if (dashRes.status === 'fulfilled') setStats(dashRes.value.data?.data || {})
         if (notesRes.status === 'fulfilled') setRecentNotes(notesRes.value.data?.data?.slice(0, 5) || [])
         if (publishRes.status === 'fulfilled') setPendingTasks(publishRes.value.data?.data?.slice(0, 5) || [])
+        if (trendRes.status === 'fulfilled') setTrendData(trendRes.value.data?.data || {})
+        if (catRes.status === 'fulfilled') setCategoryData(catRes.value.data?.data || [])
       } catch {}
       setLoading(false)
     }
@@ -72,6 +79,18 @@ export default function DashboardPage() {
     cancelled: { color: 'default', text: '已取消' },
   }
 
+  // Prepare Line chart data
+  const lineData = trendData.labels?.map((label: string, i: number) => [
+    { date: label, value: trendData.collect[i], category: '采集' },
+    { date: label, value: trendData.publish[i], category: '发布' },
+  ]).flat() || []
+
+  // Prepare Pie chart data
+  const pieData = categoryData.map((d: any) => ({
+    type: d.type === 'video' ? '视频' : '图文',
+    value: d.count,
+  }))
+
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
@@ -113,6 +132,44 @@ export default function DashboardPage() {
             </Card>
           </Col>
         ))}
+      </Row>
+
+      <Divider />
+
+      {/* 数据图表 */}
+      <Row gutter={16} style={{ marginBottom: 24 }}>
+        <Col span={12}>
+          <Card title="📈 近7天趋势">
+            <Line
+              data={lineData}
+              xField="date"
+              yField="value"
+              colorField="category"
+              height={280}
+              point={{ size: 3 }}
+              interaction={{
+                tooltip: {
+                  render: (e: any, { title, items }: any) => {
+                    return `<div>${title}${items?.map((item: any) => `<br/>${item.name}: ${item.value}`).join('')}</div>`
+                  },
+                },
+              }}
+            />
+          </Card>
+        </Col>
+        <Col span={12}>
+          <Card title="📊 素材类型分布">
+            <Pie
+              data={pieData}
+              angleField="value"
+              colorField="type"
+              height={280}
+              innerRadius={0.5}
+              label={{ text: 'type', position: 'outside' }}
+              legend={{ position: 'bottom' }}
+            />
+          </Card>
+        </Col>
       </Row>
 
       <Row gutter={16}>

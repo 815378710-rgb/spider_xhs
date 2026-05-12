@@ -21,9 +21,11 @@ async def get_categories(user=Depends(get_current_user)):
         from apis.xhs_pugongying_apis import PuGongYingAPI
         api = PuGongYingAPI()
         ok, msg, data = api.get_all_categories(settings.COOKIES)
+        if isinstance(data, str):
+            return {"success": False, "message": f"蒲公英API返回异常: {data[:100]}", "data": []}
         return {"success": ok, "data": data if ok else [], "message": msg}
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": str(e), "data": []}
 
 
 @router.post("/search")
@@ -31,7 +33,7 @@ async def search_kol(req: KOLSearchRequest, user=Depends(get_current_user)):
     try:
         from apis.xhs_pugongying_apis import PuGongYingAPI
         api = PuGongYingAPI()
-        ok, msg, data = api.get_user_by_page(req.page, settings.COOKIES, category=req.category)
+        ok, msg, data = api.get_user_by_page(req.page, settings.COOKIES, contentTag=req.category)
         return {"success": ok, "data": data if ok else [], "message": msg}
     except Exception as e:
         return {"success": False, "message": str(e)}

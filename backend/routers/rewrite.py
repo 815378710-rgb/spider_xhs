@@ -16,11 +16,13 @@ class RewriteRequest(BaseModel):
     desc: str
     style: str = "小红书爆款"
     rewrite_ratio: int = 60
+    industry: str = ""
 
 
 class SmartRewriteRequest(BaseModel):
     title: str
     desc: str
+    industry: str = ""
 
 
 class BatchRewriteRequest(BaseModel):
@@ -40,7 +42,8 @@ async def rewrite_note(req: RewriteRequest, user=Depends(get_current_user)):
         if not backend:
             return {"success": False, "message": "AI 后端未配置"}
         result = rewrite_note(req.title, req.desc, backend,
-                              style=req.style, ratio=req.rewrite_ratio)
+                              style=req.style, ratio=req.rewrite_ratio,
+                              industry=req.industry)
         return {"success": True, "data": result}
     except Exception as e:
         logger.exception(f"改写异常: {e}")
@@ -87,3 +90,25 @@ async def batch_rewrite(req: BatchRewriteRequest, user=Depends(get_current_user)
         return {"success": True, "data": results, "total": len(results)}
     except Exception as e:
         return {"success": False, "message": f"批量改写异常: {str(e)[:100]}"}
+
+
+class OptimizeTitleRequest(BaseModel):
+    title: str
+    industry: str = ""
+
+
+@router.post("/optimize-title")
+async def optimize_title(req: OptimizeTitleRequest, user=Depends(get_current_user)):
+    """专门优化标题，运用数字+emoji+悬念词公式"""
+    try:
+        from utils.rewrite import create_backend, optimize_title as _optimize
+        llm = settings.get_llm_config()
+        backend = create_backend(llm["provider"], llm["api_key"],
+                                model=llm["model"], base_url=llm["base_url"])
+        if not backend:
+            return {"success": False, "message": "AI 后端未配置"}
+        result = _optimize(req.title, backend, industry=req.industry)
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.exception(f"标题优化异常: {e}")
+        return {"success": False, "message": f"标题优化失败: {str(e)[:100]}"}

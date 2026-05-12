@@ -25,6 +25,44 @@ class CollectRequest(BaseModel):
     url: str = ""
 
 
+class NoteDetailRequest(BaseModel):
+    note_id: str = ""
+
+
+@router.post("/detail")
+async def get_note_detail(req: NoteDetailRequest, user=Depends(get_current_user)):
+    """Get note detail by note_id (for in-app viewing, no DB save)."""
+    note_id = req.note_id.strip()
+    if not note_id:
+        return {"success": False, "message": "note_id 不能为空"}
+
+    note_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+    try:
+        from apis.xhs_pc_apis import XHS_Apis
+        xhs = XHS_Apis()
+        cookies = settings.COOKIES
+        if not cookies:
+            return {"success": False, "message": "Cookie 未配置"}
+
+        success, msg, data = xhs.get_note_info(note_url, cookies)
+        if not success:
+            return {"success": False, "message": f"获取失败: {msg}"}
+
+        note_data = data.get("data", {})
+        items = note_data.get("items", [])
+        if items:
+            note_card = items[0].get("note_card", {})
+        else:
+            note_card = note_data.get("note_card", {})
+            if not note_card:
+                return {"success": False, "message": "笔记数据为空"}
+
+        return {"success": True, "data": note_card}
+    except Exception as e:
+        logger.exception(f"获取笔记详情异常: {e}")
+        return {"success": False, "message": f"获取异常: {str(e)[:100]}"}
+
+
 @router.post("/collect")
 async def collect_note(req: CollectRequest, user=Depends(get_current_user)):
     """Collect a single note by URL."""

@@ -60,7 +60,8 @@ from routers import (
     collect, search, content, drafts, rewrite, images,
     publish, automation, monitor, analytics,
     kol, qianfan, anti_crawl, proxy, tasks, notifications,
-    quick_work,
+    quick_work, logs, content_check, ai_check, crawl_monitor,
+    topic_recommend,
 )
 
 router_prefix_map = [
@@ -86,6 +87,11 @@ router_prefix_map = [
     (tasks.router,         "/api/tasks",         "任务中心"),
     (notifications.router, "/api/notifications",  "通知系统"),
     (quick_work.router,    "/api/quick-work",     "一站式工作台"),
+    (logs.router,          "/api/logs",           "日志系统"),
+    (content_check.router, "/api/content-check",  "内容检测"),
+    (ai_check.router,      "/api/ai-check",       "AI检测"),
+    (crawl_monitor.router, "/api/crawl-monitor",  "反爬监控"),
+    (topic_recommend.router, "/api/topics",       "选题推荐"),
 ]
 
 for router, prefix, tag in router_prefix_map:
@@ -96,6 +102,17 @@ for router, prefix, tag in router_prefix_map:
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "2.0.0"}
+
+
+# ── Serve data files (images, processed) ─────────────────────────────────────
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+IMAGES_DIR = os.path.join(DATA_DIR, "images")
+PROCESSED_DIR = os.path.join(DATA_DIR, "processed")
+os.makedirs(IMAGES_DIR, exist_ok=True)
+os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+app.mount("/data/images", StaticFiles(directory=IMAGES_DIR), name="data-images")
+app.mount("/data/processed", StaticFiles(directory=PROCESSED_DIR), name="data-processed")
 
 
 # ── Serve frontend (built React app) ─────────────────────────────────────────

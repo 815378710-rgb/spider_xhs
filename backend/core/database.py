@@ -39,6 +39,31 @@ async def get_db():
 
 
 async def init_db():
-    """Create all tables."""
+    """Initialize database: create tables if needed, then run Alembic migrations."""
+    import subprocess
+    from loguru import logger
+
+    # Step 1: Create tables if they don't exist (for fresh installs)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    logger.info("✅ Base tables ensured via create_all")
+
+    # Step 2: Run Alembic migrations to apply any schema changes
+    alembic_dir = os.path.join(os.path.dirname(__file__), "..", "alembic")
+    if os.path.isdir(alembic_dir):
+        try:
+            result = subprocess.run(
+                ["alembic", "upgrade", "head"],
+                cwd=os.path.dirname(__file__),  # backend dir
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                logger.info("✅ Alembic migrations applied")
+            else:
+                logger.warning(f"Alembic migration warning: {result.stderr[:200]}")
+        except FileNotFoundError:
+            logger.info("Alembic not installed, skipping migrations (create_all is sufficient)")
+        except Exception as e:
+            logger.warning(f"Alembic migration error (non-fatal): {e}")
+    else:
+        logger.info("No alembic directory found, using create_all only")

@@ -131,6 +131,15 @@ async def _execute_publish(task_id: int):
     """Execute a publish task using Creator API."""
     from apis.xhs_creator_apis import XHS_Creator_Apis
     from core.database import async_session
+    from services.audit import log_task
+
+    audit_id = await log_task(
+        task_type="publish",
+        status="running",
+        detail=f"发布任务 #{task_id}",
+        triggered_by="system",
+    )
+
     async with async_session() as db:
         result = await db.execute(select(PublishTask).where(PublishTask.id == task_id))
         task = result.scalar_one_or_none()
@@ -151,12 +160,30 @@ async def _execute_publish(task_id: int):
                 task.status = "success"
                 task.published_at = datetime.utcnow()
                 task.xhs_note_id = data.get("note_id", "")
+                await log_task(
+                    task_type="publish",
+                    status="success",
+                    detail=f"发布成功: {task.title[:30]}",
+                    output_summary=json.dumps({"note_id": task.xhs_note_id, "title": task.title[:50]}),
+                )
             else:
                 task.status = "failed"
                 task.error_msg = msg
+                await log_task(
+                    task_type="publish",
+                    status="failed",
+                    detail=f"发布失败: {task.title[:30]}",
+                    error_detail=msg,
+                )
                 if task.retry_count < task.max_retries:
                     task.status = "pending"  # Will be retried
         except Exception as e:
             task.status = "failed"
             task.error_msg = str(e)[:200]
+            await log_task(
+                task_type="publish",
+                status="failed",
+                detail=f"发布异常: {task.title[:30]}",
+                error_detail=str(e)[:500],
+            )
         await db.commit()

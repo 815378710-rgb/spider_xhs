@@ -362,7 +362,7 @@ def _get_ratio_instruction(ratio: int) -> str:
 
 def rewrite_note(title: str, desc: str, backend: LLMBackend,
                  extra_instructions: str = None, style: str = "保持原风格",
-                 ratio: int = 50) -> dict:
+                 ratio: int = 50, industry: str = "") -> dict:
     """
     改写一篇笔记的标题和正文
 
@@ -373,6 +373,7 @@ def rewrite_note(title: str, desc: str, backend: LLMBackend,
         extra_instructions: 额外的改写指令（可选，可与 style 叠加）
         style: 改写风格（12种可选）
         ratio: 改写比例（30-90），控制改写幅度
+        industry: 行业（美妆护肤/穿搭时尚/美食料理等）
 
     Returns:
         {"title": "改写后标题", "desc": "改写后正文", "provider": "xxx", "style": "xxx", "ratio": 50}
@@ -389,11 +390,17 @@ def rewrite_note(title: str, desc: str, backend: LLMBackend,
     if style_instruction:
         user_prompt += f"\n\n{style_instruction}"
 
+    # 叠加行业指令
+    if industry:
+        industry_prompt = get_industry_prompt(industry)
+        if industry_prompt:
+            user_prompt += f"\n\n{industry_prompt}"
+
     # 叠加用户自定义额外指令
     if extra_instructions:
         user_prompt += f"\n\n【用户额外要求】{extra_instructions}"
 
-    logger.info(f"正在使用 {backend.name} 改写文案 (风格: {style}, 比例: {ratio}%)...")
+    logger.info(f"正在使用 {backend.name} 改写文案 (风格: {style}, 比例: {ratio}%, 行业: {industry or '通用'})...")
     raw = backend.chat(SYSTEM_PROMPT, user_prompt)
 
     # 解析 JSON 响应
@@ -679,7 +686,126 @@ def _parse_judge_response(raw: str) -> dict:
     return {"winner": "A", "scores": {}, "reasoning": "评审响应格式异常"}
 
 
-# ── 使用示例 ──────────────────────────────────────────────────────────────────
+# ── 行业专属术语库 ────────────────────────────────────────────────────────────
+
+INDUSTRY_PROMPTS = {
+    "美妆护肤": """【美妆护肤行业专项指令】
+- 使用专业成分词：烟酰胺、玻尿酸、视黄醇、水杨酸、神经酰胺、积雪草、二裂酵母
+- 肤质描述词：干皮/油皮/混油/敏感肌/痘肌/熟龄肌
+- 护肤步骤词：水乳精华面霜、早C晚A、刷酸、肌断食
+- 爆款话题词：成分党、空瓶记、回购清单、护肤routine""",
+
+    "穿搭时尚": """【穿搭时尚行业专项指令】
+- 风格关键词：通勤穿搭、小个子穿搭、微胖穿搭、韩系/日系/法式/美式
+- 单品词：显瘦、显白、百搭、一衣多穿、胶囊衣橱
+- 季节/场景：早春穿搭、约会穿搭、面试穿搭、度假穿搭
+- 趋势词：多巴胺穿搭、美拉德风、老钱风、clean fit""",
+
+    "美食料理": """【美食料理行业专项指令】
+- 做法词：空气炸锅、电饭煲、懒人料理、快手菜、一人食
+- 场景词：减脂餐、便当、下午茶、深夜食堂、宿舍美食
+- 口感词：绝绝子、好吃到哭、入口即化、酥脆、浓郁
+- 热门话题：自制XX、XX平替、复刻网红美食""",
+
+    "旅行出游": """【旅行出游行业专项指令】
+- 场景词：周末游、小众旅行、穷游、自驾游、亲子游
+- 目的地词：XX攻略、XX拍照、XX美食、打卡XX
+- 实用词：避坑、省钱、路线、住宿推荐、交通攻略
+- 氛围词：出片、绝美、治愈、松弛感""",
+
+    "健身减脂": """【健身减脂行业专项指令】
+- 训练词：帕梅拉、周六野、韩小四、HIIT、无氧、有氧
+- 饮食词：减脂餐、蛋白质、碳水循环、16+8、低GI
+- 效果词：马甲线、蜜桃臀、直角肩、天鹅臂、瘦腿
+- 数据词：体脂率、基础代谢、BMI、卡路里""",
+
+    "母婴育儿": """【母婴育儿行业专项指令】
+- 月龄词：新生儿、0-3个月、辅食期、学步期、入园准备
+- 场景词：哄睡、断奶、分离焦虑、辅食添加、早教
+- 好物词：待产包、婴儿车、安全座椅、辅食工具
+- 情感词：新手妈妈、带娃日常、育儿焦虑、母婴好物""",
+
+    "数码科技": """【数码科技行业专项指令】
+- 产品词：测评、开箱、上手体验、深度体验、使用报告
+- 参数词：性能、续航、屏幕、处理器、像素、刷新率
+- 对比词：XX vs XX、同价位对比、性价比之王
+- 场景词：生产力工具、学习神器、办公好物""",
+
+    "家居生活": """【家居生活行业专项指令】
+- 风格词：极简风、奶油风、原木风、侘寂风、ins风
+- 场景词：出租屋改造、小户型、收纳、断舍离
+- 好物词：家居好物、提升幸福感、装修避坑、软装搭配
+- 体验词：氛围感、治愈系、温馨、松弛感""",
+}
+
+
+# ── 爆款开头模板库 ──────────────────────────────────────────────────────────
+
+HOT_OPENING_TEMPLATES = [
+    "救命！{topic}真的太{adj}了！",
+    "姐妹们！这个{topic}我后悔没早{action}！",
+    "被问了800遍的{topic}，今天终于公开了！",
+    "谁懂啊！{topic}用完之后整个人都{emotion}了！",
+    "不允许还有人不知道这个{topic}！",
+    "我的天！这个{topic}也太{adj}了吧！",
+    "姐妹们冲！{topic}真的绝了！",
+    "天花板级别的{topic}！用过都说好！",
+    "私藏了好久的{topic}，今天无私分享！",
+    "一整个爱住！{topic}真的太{adj}了！",
+    "全网都在推的{topic}，到底值不值？我来告诉你！",
+    "用了{time}的{topic}，说说真实感受！",
+]
+
+
+def get_industry_prompt(industry: str) -> str:
+    """获取行业专属提示词"""
+    return INDUSTRY_PROMPTS.get(industry, "")
+
+
+def optimize_title(title: str, backend, industry: str = "") -> dict:
+    """
+    专门优化标题，运用数字+emoji+悬念词公式
+
+    Args:
+        title: 原标题
+        backend: LLM 后端
+        industry: 行业
+
+    Returns:
+        {"title": "优化后标题", "variations": ["备选1", "备选2", "备选3"]}
+    """
+    industry_prompt = get_industry_prompt(industry)
+
+    system_prompt = """你是一个小红书标题优化专家。你的任务是优化笔记标题，让它具备爆款潜质。
+
+## 标题优化公式
+1. **数字公式**：3招/5分钟/100元/第1个 — 数字让标题具体可信
+2. **emoji公式**：在关键位置加1-2个emoji — 增加视觉吸引力
+3. **悬念公式**：用"居然""没想到""原来"制造好奇心
+4. **身份公式**：打工人/学生党/宝妈/成分党 — 精准定位人群
+5. **情绪公式**：绝了/谁懂/救命/真香 — 触发情绪共鸣
+
+## 要求
+- 标题15-25字
+- 带1-2个emoji
+- 必须制造点击欲
+- 自然融入搜索关键词
+
+## 输出格式
+严格输出JSON：{"title": "优化后标题", "variations": ["备选标题1", "备选标题2", "备选标题3"]}
+不要输出其他内容。"""
+
+    user_prompt = f"请优化以下标题：\n\n原标题：{title}"
+    if industry_prompt:
+        user_prompt += f"\n\n{industry_prompt}"
+
+    try:
+        raw = backend.chat(system_prompt, user_prompt)
+        result = json.loads(re.search(r'\{.*\}', raw, re.DOTALL).group())
+        return result
+    except Exception as e:
+        logger.error(f"标题优化失败: {e}")
+        return {"title": title, "variations": []}
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
