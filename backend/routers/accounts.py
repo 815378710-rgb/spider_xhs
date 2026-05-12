@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy import select, delete
-from core.deps import get_current_user
+from core.deps import get_current_user, require_admin
 from core.database import async_session
 from models.account import Account
 from models.cookie import Cookie
@@ -59,7 +59,8 @@ async def create_account(req: AccountCreate, user=Depends(get_current_user)):
 
 
 @router.delete("/{account_id}")
-async def delete_account(account_id: int, user=Depends(get_current_user)):
+async def delete_account(account_id: int, admin=Depends(require_admin)):
+    """P1-11 修复：只有管理员可以删除账号"""
     async with async_session() as db:
         await db.execute(delete(Cookie).where(Cookie.account_id == account_id))
         await db.execute(delete(Account).where(Account.id == account_id))
