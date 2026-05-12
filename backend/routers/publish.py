@@ -86,12 +86,19 @@ async def create_publish_task(req: PublishCreateRequest, user=Depends(get_curren
         db.add(task)
         await db.flush()
         task_id = task.id
-        await db.commit()
+        # P1-5 修复：移除手动commit，async_session会自动commit
+        # await db.commit()  # 删除此行，避免重复提交
 
         # If immediate, publish now
         if not req.scheduled_at:
             import asyncio
-            asyncio.create_task(_execute_publish(task_id))
+            # P1-6 修复：包装asyncio.create_task，处理异常
+            try:
+                asyncio.create_task(_execute_publish(task_id))
+            except Exception as e:
+                logger.exception(f"启动发布任务失败: {e}")
+                task.status = "failed"
+                task.error_msg = f"启动失败: {str(e)[:200]}"
 
         return {"success": True, "id": task_id, "message": "发布任务已创建"}
 
