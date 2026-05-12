@@ -27,25 +27,37 @@ export default function DraftWorkshopPage() {
   useEffect(() => { load() }, [page])
 
   const onCreate = async (values: any) => {
-    await client.post('/drafts', values)
-    message.success('草稿已创建')
-    form.resetFields()
-    load()
+    try {
+      await client.post('/drafts', values)
+      message.success('草稿已创建')
+      form.resetFields()
+      load()
+    } catch (e: any) {
+      message.error('创建草稿失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const onUpdate = async () => {
     if (!editing) return
-    const values = form.getFieldsValue()
-    await client.put(`/drafts/${editing.id}`, values)
-    message.success('已更新')
-    setEditing(null)
-    load()
+    try {
+      const values = form.getFieldsValue()
+      await client.put(`/drafts/${editing.id}`, values)
+      message.success('已更新')
+      setEditing(null)
+      load()
+    } catch (e: any) {
+      message.error('更新失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const onDelete = async (id: number) => {
-    await client.delete(`/drafts/${id}`)
-    message.success('已删除')
-    load()
+    try {
+      await client.delete(`/drafts/${id}`)
+      message.success('已删除')
+      load()
+    } catch (e: any) {
+      message.error('删除失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const onAIRewrite = async (draft: any) => {
@@ -67,11 +79,15 @@ export default function DraftWorkshopPage() {
   }
 
   const onPublish = async (draft: any) => {
-    await client.post('/publish', {
-      title: draft.title, content: draft.content,
-      images_json: draft.images_json, tags_json: draft.tags_json,
-    })
-    message.success('已提交发布')
+    try {
+      await client.post('/publish', {
+        title: draft.title, content: draft.content,
+        images_json: draft.images_json, tags_json: draft.tags_json,
+      })
+      message.success('已提交发布')
+    } catch (e: any) {
+      message.error('发布失败: ' + (e.response?.data?.detail || e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   return (

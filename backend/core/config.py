@@ -16,7 +16,7 @@ os.makedirs(CONFIG_DIR, exist_ok=True)
 
 _DEFAULTS = {
     "APP_NAME": "Spider_XHS",
-    "APP_VERSION": "2.0.0",
+    "APP_VERSION": "2.1.0",
     "DEBUG": False,
     "SECRET_KEY": "potato-xhs-helper-secret-change-me",
     "DATABASE_URL": f"sqlite+aiosqlite:///{os.path.join(DATA_DIR, 'spider_xhs.db')}",
@@ -31,6 +31,12 @@ _DEFAULTS = {
     "COOKIES": "",
     "HOST": "0.0.0.0",
     "PORT": 5000,
+    # a1 Cookie 自动续期配置
+    "A1_AUTO_REFRESH": "true",
+    "A1_REFRESH_INTERVAL": "480",  # 8分钟（a1有效期10分钟）
+    # curl_cffi TLS 指纹模拟
+    "CURL_CFFI_ENABLED": "true",
+    "CURL_CFFI_IMPERSONATE": "chrome120",
 }
 
 
@@ -110,6 +116,25 @@ class _Settings:
             "model": self._values.get("LLM_MODEL", ""),
             "base_url": self._values.get("LLM_BASE_URL", ""),
         }
+
+    def get_bool(self, key: str, default: bool = False) -> bool:
+        """Get a setting value as boolean."""
+        val = self._values.get(key.upper(), "")
+        if isinstance(val, bool):
+            return val
+        return str(val).lower() in ("true", "1", "yes")
+
+    def get_int(self, key: str, default: int = 0) -> int:
+        """Get a setting value as integer."""
+        val = self._values.get(key.upper(), default)
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default
+
+    def get(self, key: str, default=None):
+        """Get a setting value (dict-style get with default)."""
+        return self._values.get(key.upper(), default)
 
 
 @lru_cache()

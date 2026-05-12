@@ -33,39 +33,55 @@ export default function AutomationPage() {
   useEffect(() => { load() }, [])
 
   const onCreate = async (values: any) => {
-    const config = JSON.stringify({
-      rewrite: values.rewrite !== false,
-      image_process: values.image_process || false,
-      image_preset: values.image_preset || 'light',
-      publish: values.publish !== false,
-      max_retries: values.max_retries || 1,
-    })
-    await client.post('/automation', {
-      name: values.name, keywords: values.keywords,
-      schedule_cron: values.schedule_cron || '0 9 * * *',
-      pipeline_config: config,
-    })
-    message.success('流水线已创建')
-    setModalOpen(false)
-    form.resetFields()
-    load()
+    try {
+      const config = JSON.stringify({
+        rewrite: values.rewrite !== false,
+        image_process: values.image_process || false,
+        image_preset: values.image_preset || 'light',
+        publish: values.publish !== false,
+        max_retries: values.max_retries || 1,
+      })
+      await client.post('/automation', {
+        name: values.name, keywords: values.keywords,
+        schedule_cron: values.schedule_cron || '0 9 * * *',
+        pipeline_config: config,
+      })
+      message.success('流水线已创建')
+      setModalOpen(false)
+      form.resetFields()
+      load()
+    } catch (e: any) {
+      message.error('创建失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const onToggle = async (id: number) => {
-    await client.post(`/automation/${id}/toggle`)
-    load()
+    try {
+      await client.post(`/automation/${id}/toggle`)
+      load()
+    } catch (e: any) {
+      message.error('操作失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const onRun = async (id: number) => {
-    await client.post(`/automation/${id}/run`)
-    message.success('流水线已启动')
-    load()
+    try {
+      await client.post(`/automation/${id}/run`)
+      message.success('流水线已启动')
+      load()
+    } catch (e: any) {
+      message.error('启动失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const onDelete = async (id: number) => {
-    await client.delete(`/automation/${id}`)
-    message.success('已删除')
-    load()
+    try {
+      await client.delete(`/automation/${id}`)
+      message.success('已删除')
+      load()
+    } catch (e: any) {
+      message.error('删除失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const onViewLogs = async (item: any) => {

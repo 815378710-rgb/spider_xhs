@@ -1,9 +1,19 @@
 import React, { useState } from 'react'
-import { Card, Upload, Button, Select, Space, Typography, Row, Col, message, Image, Spin, Tabs, Radio } from 'antd'
-import { UploadOutlined, ScissorOutlined, PictureOutlined, BulbOutlined } from '@ant-design/icons'
+import { Card, Upload, Button, Select, Space, Typography, Row, Col, message, Image, Spin, Tabs, Radio, Tooltip } from 'antd'
+import { UploadOutlined, ScissorOutlined, PictureOutlined, BulbOutlined, DownloadOutlined } from '@ant-design/icons'
 import client from '../../api/client'
 
 const { Title, Text } = Typography
+
+// 下载图片辅助函数
+const downloadImage = (base64Data: string, filename: string) => {
+  const link = document.createElement('a')
+  link.href = base64Data
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
 
 // ── 传统降重 Tab ─────────────────────────────────────────────────────────────
 
@@ -55,6 +65,12 @@ function AntiDuplicateTab() {
             开始处理
           </Button>
           <Button onClick={() => { setImages([]); setProcessed([]) }}>清空</Button>
+          {processed.length > 0 && (
+            <Button icon={<DownloadOutlined />} onClick={() => {
+              processed.forEach((img, i) => downloadImage(img, `降重_${i + 1}.png`))
+              message.success(`已下载 ${processed.length} 张图片`)
+            }}>下载全部</Button>
+          )}
         </Space>
       </Card>
       <Row gutter={16}>
@@ -74,8 +90,15 @@ function AntiDuplicateTab() {
             <Spin spinning={loading}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {processed.map((img, i) => (
-                  <Image key={i} src={img} width={120} height={120}
-                    style={{ objectFit: 'cover', borderRadius: 4 }} />
+                  <div key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                    <Image src={img} width={120} height={120}
+                      style={{ objectFit: 'cover', borderRadius: 4 }} />
+                    <Tooltip title="下载">
+                      <Button type="primary" size="small" icon={<DownloadOutlined />}
+                        style={{ position: 'absolute', bottom: 4, right: 4, opacity: 0.85 }}
+                        onClick={() => downloadImage(img, `降重_${i + 1}.png`)} />
+                    </Tooltip>
+                  </div>
                 ))}
                 {!processed.length && !loading && <div style={{ color: '#999', padding: 40 }}>处理后的图片将显示在这里</div>}
               </div>
@@ -161,6 +184,12 @@ function AIRedrawTab() {
               开始风格化
             </Button>
             <Button onClick={() => { setImages([]); setProcessed([]) }}>清空</Button>
+            {processed.length > 0 && (
+              <Button icon={<DownloadOutlined />} onClick={() => {
+                processed.forEach((img, i) => downloadImage(img, `风格重绘_${i + 1}.png`))
+                message.success(`已下载 ${processed.length} 张图片`)
+              }}>下载全部</Button>
+            )}
           </Space>
         </Space>
       </Card>
@@ -181,8 +210,15 @@ function AIRedrawTab() {
             <Spin spinning={loading}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {processed.map((img, i) => (
-                  <Image key={i} src={img} width={120} height={120}
-                    style={{ objectFit: 'cover', borderRadius: 4 }} />
+                  <div key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                    <Image src={img} width={120} height={120}
+                      style={{ objectFit: 'cover', borderRadius: 4 }} />
+                    <Tooltip title="下载">
+                      <Button type="primary" size="small" icon={<DownloadOutlined />}
+                        style={{ position: 'absolute', bottom: 4, right: 4, opacity: 0.85 }}
+                        onClick={() => downloadImage(img, `风格重绘_${i + 1}.png`)} />
+                    </Tooltip>
+                  </div>
                 ))}
                 {!processed.length && !loading && <div style={{ color: '#999', padding: 40 }}>风格化结果将显示在这里</div>}
               </div>

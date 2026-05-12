@@ -1,11 +1,14 @@
 """
-配置管理路由
+配置管理路由 — Cookie 按用户隔离，LLM 配置全局
 """
-from fastapi import APIRouter, Depends
+import re
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from sqlalchemy import select
 from core.config import settings
 from core.deps import get_current_user
+from core.database import async_session
 
 router = APIRouter()
 
@@ -20,10 +23,44 @@ class ConfigUpdate(BaseModel):
 
 @router.get("")
 async def get_config(user=Depends(get_current_user)):
-    """Get current configuration."""
+    """Get configuration. Cookie is per-user; LLM is global."""
+    user_id = int(user["sub"])
+    user_cookie = ""
+    async with async_session() as db:
+        from models.user import User
+        result = await db.execute(select(User).where(User.id == user_id))
+        u = result.scalar_one_or_none()
+        if u:
+            user_cookie = u.cookie or ""
+
     return {
-        "cookies_configured": bool(settings.COOKIES),
-        "cookies": settings.COOKIES,
+        "cookies_configured": bool(user_cookie),
+        "cookies": user_cookie,
+        "llm_provider": settings.LLM_PROVIDER,
+        "llm_api_key": "",  # Don't expose API key to users
+        "llm_model": settings.LLM_MODEL,
+        "llm_configured": bool(settings.LLM_API_KEY),
+        "llm_base_url": settings.LLM_BASE_URL,
+    }
+
+
+@router.get("/admin")
+async def get_admin_config(user=Depends(get_current_user)):
+    """Admin gets full config including API key."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    user_id = int(user["sub"])
+    user_cookie = ""
+    async with async_session() as db:
+        from models.user import User
+        result = await db.execute(select(User).where(User.id == user_id))
+        u = result.scalar_one_or_none()
+        if u:
+            user_cookie = u.cookie or ""
+
+    return {
+        "cookies_configured": bool(user_cookie),
+        "cookies": user_cookie,
         "llm_provider": settings.LLM_PROVIDER,
         "llm_api_key": settings.LLM_API_KEY,
         "llm_model": settings.LLM_MODEL,
@@ -34,43 +71,64 @@ async def get_config(user=Depends(get_current_user)):
 
 @router.post("")
 async def update_config(req: ConfigUpdate, user=Depends(get_current_user)):
-    """Update configuration."""
-    update_kwargs = {}
+    """Update configuration. Cookie per-user; LLM global."""
+    user_id = int(user["sub"])
+
+    # Handle cookie update (per-user)
     if req.cookies is not None:
-        # Clean up cookie string: remove newlines, extra spaces, and validate format
-        cookies_str = req.cookies.strip()
-        # Remove newlines and carriage returns
-        cookies_str = cookies_str.replace('\n', '').replace('\r', '')
-        # Remove extra spaces around semicolons
-        import re
+        cookies_str = req.cookies.strip().replace('\n', '').replace('\r', '')
         cookies_str = re.sub(r'\s*;\s*', '; ', cookies_str)
         cookies_str = re.sub(r'\s+', ' ', cookies_str).strip()
-        
-        # Validate that it looks like a cookie string
+
         if cookies_str and '=' in cookies_str:
-            update_kwargs["COOKIES"] = cookies_str
+            async with async_session() as db:
+                from models.user import User
+                result = await db.execute(select(User).where(User.id == user_id))
+                u = result.scalar_one_or_none()
+                if u:
+                    u.cookie = cookies_str
+        elif cookies_str == "":
+            # Allow clearing cookie
+            async with async_session() as db:
+                from models.user import User
+                result = await db.execute(select(User).where(User.id == user_id))
+                u = result.scalar_one_or_none()
+                if u:
+                    u.cookie = ""
         else:
-            from fastapi import HTTPException
             raise HTTPException(status_code=400, detail="Cookie 格式无效，请检查后重试")
-    if req.llm_provider is not None:
-        update_kwargs["LLM_PROVIDER"] = req.llm_provider
-    if req.llm_api_key is not None:
-        update_kwargs["LLM_API_KEY"] = req.llm_api_key
-    if req.llm_model is not None:
-        update_kwargs["LLM_MODEL"] = req.llm_model
-    if req.llm_base_url is not None:
-        update_kwargs["LLM_BASE_URL"] = req.llm_base_url
-    settings.update(**update_kwargs)
+
+    # Handle LLM config (global, admin only)
+    if user.get("role") == "admin":
+        update_kwargs = {}
+        if req.llm_provider is not None:
+            update_kwargs["LLM_PROVIDER"] = req.llm_provider
+        if req.llm_api_key is not None:
+            update_kwargs["LLM_API_KEY"] = req.llm_api_key
+        if req.llm_model is not None:
+            update_kwargs["LLM_MODEL"] = req.llm_model
+        if req.llm_base_url is not None:
+            update_kwargs["LLM_BASE_URL"] = req.llm_base_url
+        if update_kwargs:
+            settings.update(**update_kwargs)
+
     return {"success": True, "message": "配置已更新"}
 
 
 @router.post("/test-cookie")
 async def test_cookie(user=Depends(get_current_user)):
-    """Test if current cookie is valid."""
+    """Test if current user's cookie is valid."""
     from apis.xhs_pc_apis import XHS_Apis
-    cookies_str = settings.COOKIES
+    user_id = int(user["sub"])
+
+    async with async_session() as db:
+        from models.user import User
+        result = await db.execute(select(User).where(User.id == user_id))
+        u = result.scalar_one_or_none()
+        cookies_str = u.cookie if u else ""
+
     if not cookies_str:
-        return {"success": False, "message": "Cookie 未配置"}
+        return {"success": False, "message": "Cookie 未配置，请先提交你的 Cookie"}
     try:
         xhs = XHS_Apis()
         success, msg, data = xhs.get_user_self_info(cookies_str)
@@ -79,65 +137,4 @@ async def test_cookie(user=Depends(get_current_user)):
             return {"success": True, "message": f"Cookie 有效，用户: {nickname}"}
         return {"success": False, "message": f"Cookie 无效: {msg}"}
     except Exception as e:
-        return {"success": False, "message": f"测试失败: {str(e)}"}
-
-
-@router.post("/test-ai")
-async def test_ai(body: dict = {}, user=Depends(get_current_user)):
-    """Test AI model connection."""
-    from utils.rewrite import create_backend
-    provider = body.get("llm_provider") or body.get("provider") or settings.LLM_PROVIDER
-    api_key = body.get("llm_api_key") or body.get("api_key") or settings.LLM_API_KEY
-    model = body.get("llm_model") or body.get("model") or settings.LLM_MODEL
-    base_url = body.get("llm_base_url") or body.get("base_url") or settings.LLM_BASE_URL
-
-    if not api_key:
-        return {"success": False, "message": "API Key 未配置"}
-    try:
-        kwargs = {}
-        if model:
-            kwargs["model"] = model
-        if base_url:
-            kwargs["base_url"] = base_url
-        backend = create_backend(provider, api_key, **kwargs)
-        if not backend:
-            return {"success": False, "message": "创建后端失败"}
-        result = backend.chat("你是一个助手", "请回复'连接成功'两个字")
-        return {"success": True, "message": f"{backend.name} 连接成功！模型回复: {result[:50]}"}
-    except Exception as e:
-        return {"success": False, "message": f"{provider}/{model} 连接失败: {str(e)[:100]}"}
-
-
-@router.post("/models")
-async def list_models(body: dict = {}, user=Depends(get_current_user)):
-    """List available models from provider API."""
-    import requests as req
-    provider = body.get("llm_provider") or body.get("provider") or "mimo"
-    api_key = body.get("llm_api_key") or body.get("api_key") or ""
-    base_url = body.get("llm_base_url") or body.get("base_url") or ""
-
-    if not api_key:
-        return {"success": False, "message": "API Key 未配置", "models": []}
-
-    if provider == "mimo":
-        default_base = "https://token-plan-cn.xiaomimimo.com/v1"
-        headers = {"api-key": api_key}
-    elif provider == "deepseek":
-        default_base = "https://api.deepseek.com/v1"
-        headers = {"Authorization": f"Bearer {api_key}"}
-    else:
-        default_base = base_url or ""
-        headers = {"Authorization": f"Bearer {api_key}"}
-
-    target_url = (base_url or default_base).rstrip("/") + "/models"
-    try:
-        resp = req.request("GET", target_url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        models = [{"id": m.get("id", ""), "name": m.get("id", "")} for m in data.get("data", []) if m.get("id")]
-        # Filter out TTS models for mimo
-        if provider == "mimo":
-            models = [m for m in models if "tts" not in m["id"]]
-        return {"success": True, "models": models}
-    except Exception:
-        return {"success": True, "models": [], "message": "自动获取失败，使用默认列表"}
+        return {"success": False, "message": f"测试失败: {str(e)[:100]}"}

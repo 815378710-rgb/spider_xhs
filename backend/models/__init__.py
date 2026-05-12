@@ -8,9 +8,10 @@ from models.automation import Automation, AutomationLog
 from models.monitor import MonitorItem, MonitorSnapshot
 from models.task_log import TaskLog
 from models.notification import Notification
+from models.user import User, LicenseKey, Announcement
 
 __all__ = [
     "Account", "Cookie", "Note", "Draft", "Tag", "NoteTag",
     "PublishTask", "Automation", "AutomationLog", "MonitorItem", "MonitorSnapshot",
-    "TaskLog", "Notification",
+    "TaskLog", "Notification", "User", "LicenseKey", "Announcement",
 ]

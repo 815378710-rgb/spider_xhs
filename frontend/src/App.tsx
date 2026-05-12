@@ -23,16 +23,25 @@ import LogsPage from './pages/Logs'
 import ContentCheckPage from './pages/ContentCheck'
 import TopicRecommendPage from './pages/TopicRecommend'
 import UserCenterPage from './pages/UserCenter'
+import AdminPage from './pages/Admin'
 import { useAuthStore } from './stores/auth'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const navigate = useNavigate()
-  const location = useLocation()
-  const cookieConfigured = useAuthStore(s => s.cookieConfigured)
-
-  const publicPaths = ['/settings', '/login', '/user-center']
-  if (!cookieConfigured && !publicPaths.includes(location.pathname)) {
+  const isLoggedIn = useAuthStore(s => s.isLoggedIn)
+  if (!isLoggedIn) {
     return <Navigate to="/login" replace />
+  }
+  return <>{children}</>
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const role = useAuthStore(s => s.role)
+  const isLoggedIn = useAuthStore(s => s.isLoggedIn)
+  if (!isLoggedIn) {
+    return <Navigate to="/login" replace />
+  }
+  if (role !== 'admin') {
+    return <Navigate to="/" replace />
   }
   return <>{children}</>
 }
@@ -50,6 +59,13 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/admin" element={
+              <AdminRoute>
+                <AppLayout>
+                  <AdminPage />
+                </AppLayout>
+              </AdminRoute>
+            } />
             <Route path="*" element={
               <ProtectedRoute>
                 <AppLayout>

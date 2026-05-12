@@ -40,8 +40,16 @@ async def recommend_topics(req: TopicRecommendRequest, user=Depends(get_current_
                 "desc": note_card.get("desc", "")[:100],
             })
 
-        from utils.rewrite import create_backend_from_env
-        llm = create_backend_from_env()
+        from utils.rewrite import create_backend
+        llm_config = settings.get_llm_config()
+        if not llm_config.get("api_key"):
+            return {"success": False, "message": "请先在设置中配置 AI 大模型（API Key）"}
+        kwargs = {}
+        if llm_config.get("model"):
+            kwargs["model"] = llm_config["model"]
+        if llm_config.get("base_url"):
+            kwargs["base_url"] = llm_config["base_url"]
+        llm = create_backend(llm_config["provider"], llm_config["api_key"], **kwargs)
 
         system_prompt = "你是一个小红书爆款选题分析师，擅长分析热门内容趋势并推荐选题。"
         user_prompt = f"""根据以下"{req.keyword}"领域的热门笔记数据，推荐 {req.count} 个有爆款潜力的选题方向。

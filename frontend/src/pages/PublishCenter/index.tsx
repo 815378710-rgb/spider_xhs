@@ -27,27 +27,39 @@ export default function PublishCenterPage() {
   useEffect(() => { load() }, [page])
 
   const onCreate = async (values: any) => {
-    const payload = { ...values }
-    if (values.scheduled_at) {
-      payload.scheduled_at = values.scheduled_at.toISOString()
+    try {
+      const payload = { ...values }
+      if (values.scheduled_at) {
+        payload.scheduled_at = values.scheduled_at.toISOString()
+      }
+      await client.post('/publish', payload)
+      message.success('发布任务已创建')
+      setModalOpen(false)
+      form.resetFields()
+      load()
+    } catch (e: any) {
+      message.error('创建发布任务失败: ' + (e.response?.data?.message || e.message || '未知错误'))
     }
-    await client.post('/publish', payload)
-    message.success('发布任务已创建')
-    setModalOpen(false)
-    form.resetFields()
-    load()
   }
 
   const onCancel = async (id: number) => {
-    await client.post('/publish/cancel', { task_id: id })
-    message.success('已取消')
-    load()
+    try {
+      await client.post('/publish/cancel', { task_id: id })
+      message.success('已取消')
+      load()
+    } catch (e: any) {
+      message.error('取消失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const onRetry = async (id: number) => {
-    await client.post(`/publish/retry/${id}`)
-    message.success('重试中')
-    load()
+    try {
+      await client.post(`/publish/retry/${id}`)
+      message.success('重试中')
+      load()
+    } catch (e: any) {
+      message.error('重试失败: ' + (e.response?.data?.message || e.message || '未知错误'))
+    }
   }
 
   const statusMap: Record<string, { color: string; text: string }> = {

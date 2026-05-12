@@ -2,11 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 系统依赖：Node.js（签名算法需要）+ OpenCV 依赖
+# 系统依赖：Node.js（签名算法需要）+ OpenCV 依赖 + curl_cffi 依赖
 RUN apt-get update && apt-get install -y \
     curl \
     libgl1 \
     libglib2.0-0 \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
@@ -28,6 +29,7 @@ COPY . .
 ENV NODE_PATH=/app/node_modules
 ENV PYTHONUNBUFFERED=1
 ENV NODE_ENV=production
+ENV APP_VERSION=2.1.0
 
 EXPOSE 5005
 

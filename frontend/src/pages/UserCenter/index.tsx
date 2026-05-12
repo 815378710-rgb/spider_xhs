@@ -1,549 +1,644 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
-  Card, Form, Input, Button, Select, Space, Typography, Tabs, message,
-  QRCode, Spin, Alert, Tag, Divider, Row, Col, Statistic, Descriptions,
+  Card, Input, Button, Typography, Tabs, message, Space, Tag, Descriptions,
+  Row, Col, Statistic, Alert, Segmented, Spin, Image, InputRef
 } from 'antd'
 import {
-  QrcodeOutlined, LockOutlined, ReloadOutlined, SaveOutlined,
-  ThunderboltOutlined, UserOutlined, CheckCircleOutlined,
-  CloseCircleOutlined, RobotOutlined, CloudOutlined,
+  LockOutlined, SaveOutlined, CheckCircleOutlined, CloseCircleOutlined,
+  InfoCircleOutlined, UserOutlined, QrcodeOutlined, BrowserOutlined,
+  LoadingOutlined, CheckCircleFilled, ExclamationCircleFilled, GlobalOutlined
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
 import client from '../../api/client'
 import { useAuthStore } from '../../stores/auth'
 
 const { Title, Text, Paragraph } = Typography
 
-export default function UserCenterPage() {
-  const navigate = useNavigate()
-  const setCookieConfigured = useAuthStore(s => s.setCookieConfigured)
+// 登录方式类型
+type LoginMethod = 'qrcode' | 'browser'
 
-  // ── Cookie / Login state ─────────────────────────────────────────────────
-  const [cookieForm] = Form.useForm()
+// 登录状态类型
+interface LoginSession {
+  sessionId: string
+  method: LoginMethod
+  status: 'waiting' | 'scanning' | 'confirmed' | 'completed' | 'failed' | 'secondary_verify'
+  qrUrl?: string
+  qrImageB64?: string
+  message?: string
+  cookies?: string
+  verificationType?: string
+  verificationData?: any
+  verificationScreenshotB64?: string
+  elapsed?: number
+}
+
+export default function UserCenterPage() {
+  const { username, role } = useAuthStore()
+
+  // Cookie管理状态
+  const [cookieText, setCookieText] = useState('')
   const [cookieSaving, setCookieSaving] = useState(false)
   const [cookieTesting, setCookieTesting] = useState(false)
   const [cookieStatus, setCookieStatus] = useState<'unchecked' | 'valid' | 'invalid'>('unchecked')
-  const [cookieUser, setCookieUser] = useState<string>('')
+  const [cookieUser, setCookieUser] = useState('')
 
-  // Browser QR login state
-  const [browserSession, setBrowserSession] = useState<any>(null)
-  const [browserStatus, setBrowserStatus] = useState<string>('')
-  const [browserLoading, setBrowserLoading] = useState(false)
-  const browserPollRef = useRef<any>(null)
+  // 系统信息
+  const [sysInfo, setSysInfo] = useState<any>(null)
 
-  // QR Code login state
-  const [qrSession, setQrSession] = useState<any>(null)
-  const [qrStatus, setQrStatus] = useState('')
-  const qrPollRef = useRef<any>(null)
-
-  // ── 二次验证状态 ──────────────────────────────────────────────────────
-  const [verifyType, setVerifyType] = useState<string>('')
-  const [verifyData, setVerifyData] = useState<any>(null)
-  const [verifyScreenshot, setVerifyScreenshot] = useState<string>('')
+  // 小红书登录状态
+  const [loginMethod, setLoginMethod] = useState<LoginMethod>('qrcode')
+  const [loginSession, setLoginSession] = useState<LoginSession | null>(null)
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [pollTimer, setPollTimer] = useState<ReturnType<typeof setInterval> | null>(null)
   const [verifyCode, setVerifyCode] = useState('')
-  const [verifyLoading, setVerifyLoading] = useState(false)
+  const verifyInputRef = useRef<any>(null)
 
-  // ── AI Model state ─────────────────────────────────────────────────────
-  const [aiForm] = Form.useForm()
-  const [aiSaving, setAiSaving] = useState(false)
-  const [aiTesting, setAiTesting] = useState(false)
-  const [models, setModels] = useState<any[]>([])
-
-  const stopBrowserPoll = useCallback(() => {
-    if (browserPollRef.current) {
-      clearInterval(browserPollRef.current)
-      browserPollRef.current = null
-    }
-  }, [])
-
-  const stopQrPoll = useCallback(() => {
-    if (qrPollRef.current) {
-      clearInterval(qrPollRef.current)
-      qrPollRef.current = null
-    }
-  }, [])
-
-  useEffect(() => () => { stopBrowserPoll(); stopQrPoll() }, [stopBrowserPoll, stopQrPoll])
-
-  // ── Load existing config ──────────────────────────────────────────────
-  const loadConfig = async () => {
-    try {
-      const r = await client.get('/config')
-      const d = r.data
-      cookieForm.setFieldsValue({ cookies: d.cookies })
-      aiForm.setFieldsValue({
-        llm_provider: d.llm_provider,
-        llm_api_key: d.llm_api_key,
-        llm_model: d.llm_model,
-        llm_base_url: d.llm_base_url,
-      })
-      if (d.cookies_configured) {
-        checkCookieStatus()
+  // 清理轮询定时器
+  useEffect(() => {
+    return () => {
+      if (pollTimer) {
+        clearInterval(pollTimer)
       }
-    } catch (e: any) {
-      message.error('加载配置失败')
     }
-  }
+  }, [pollTimer])
 
-  useEffect(() => { loadConfig() }, [])
+  // 加载初始数据
+  useEffect(() => {
+    // 加载当前配置
+    client.get('/config').then(r => {
+      const d = r.data
+      setCookieText(d.cookies || '')
+    }).catch(() => {})
 
-  // ── Cookie operations ───────────────────────────────────────────────
-  const onSaveCookie = async (values: any) => {
+    // 加载系统信息
+    client.get('/health').then(r => setSysInfo(r.data)).catch(() => {})
+  }, [])
+
+  // ==================== Cookie管理相关函数 ====================
+
+  const saveCookie = async () => {
+    if (!cookieText.trim()) { message.warning('请输入Cookie'); return }
     setCookieSaving(true)
     try {
-      await client.post('/config', values)
-      message.success('Cookie已保存')
-      checkCookieStatus()
+      await client.post('/config', { cookies: cookieText.trim() })
+      message.success('Cookie 已保存')
     } catch (e: any) {
-      message.error('保存失败: ' + (e.response?.data?.message || e.message))
+      message.error(e.response?.data?.detail || '保存失败')
     }
     setCookieSaving(false)
   }
 
-  const checkCookieStatus = async () => {
+  const testCookie = async () => {
     setCookieTesting(true)
     try {
       const r = await client.post('/config/test-cookie')
       if (r.data.success) {
         setCookieStatus('valid')
-        const match = r.data.message.match(/用户:\s*(.+)/)
-        setCookieUser(match ? match[1] : '已登录')
+        setCookieUser(r.data.message)
+        message.success(r.data.message)
       } else {
         setCookieStatus('invalid')
-        setCookieUser('')
+        setCookieUser(r.data.message)
+        message.warning(r.data.message)
       }
-    } catch {
-      setCookieStatus('unchecked')
+    } catch (e: any) {
+      setCookieStatus('invalid')
+      message.error('测试失败: ' + (e.response?.data?.detail || e.message))
     }
     setCookieTesting(false)
   }
 
-  // ── Browser QR login ─────────────────────────────────────────────────
-  const startBrowserLogin = async () => {
-    setBrowserLoading(true)
-    stopBrowserPoll()
-    try {
-      const r = await client.post('/login/browser/start')
-      if (r.data.success) {
-        setBrowserSession(r.data)
-        setBrowserStatus('请在弹出的浏览器窗口中扫码登录...')
-        startBrowserPoll(r.data.session_id)
-      } else {
-        message.warning(r.data.message)
-      }
-    } catch {
-      message.error('启动浏览器登录失败')
-    }
-    setBrowserLoading(false)
-  }
+  // ==================== 小红书登录相关函数 ====================
 
-  const startBrowserPoll = useCallback((sid: string) => {
-    stopBrowserPoll()
-    browserPollRef.current = setInterval(async () => {
-      try {
-        const check = await client.post('/login/browser/check', { session_id: sid })
-        if (check.data.success && check.data.cookies) {
-          stopBrowserPoll()
-          setVerifyType('')
-          message.success(check.data.message || '登录成功！')
-          setCookieConfigured(true)
-          setBrowserSession(null)
-          setBrowserStatus('')
-          loadConfig()
-        } else if (check.data.status === 'secondary_verify') {
-          stopBrowserPoll()
-          setVerifyType(check.data.verification_type)
-          setVerifyData(check.data.verification_data)
-          setVerifyScreenshot(check.data.verification_screenshot_b64)
-        } else if (check.data.status === 'failed') {
-          stopBrowserPoll()
-          message.error(check.data.message)
-          setBrowserSession(null)
-          setBrowserStatus('')
-          setVerifyType('')
-        } else {
-          setBrowserStatus(check.data.message || '等待扫码...')
-        }
-      } catch {}
-    }, 3000)
-  }, [stopBrowserPoll, setCookieConfigured])
-
-  // ── QR Code login ────────────────────────────────────────────────────
-  const startQrLogin = async () => {
-    setBrowserLoading(true)
-    stopBrowserPoll()
-    stopQrPoll()
+  // 开始二维码登录
+  const startQrcodeLogin = async () => {
+    setLoginLoading(true)
+    setLoginSession(null)
     try {
       const r = await client.post('/login/qrcode')
       if (r.data.success) {
-        setQrSession(r.data)
-        setQrStatus('请使用小红书APP扫描二维码')
-        qrPollRef.current = setInterval(async () => {
-          try {
-            const check = await client.post('/login/check', { session_id: r.data.session_id })
-            if (check.data.success && check.data.cookies) {
-              clearInterval(qrPollRef.current)
-              message.success(check.data.message || '登录成功！')
-              setCookieConfigured(true)
-              setQrSession(null)
-              setQrStatus('')
-              loadConfig()
-            } else if (check.data.message?.includes('过期')) {
-              clearInterval(qrPollRef.current)
-              message.warning(check.data.message)
-              setQrSession(null)
-            } else {
-              setQrStatus(check.data.message || '等待扫码...')
-            }
-          } catch {}
-        }, 3000)
+        const session: LoginSession = {
+          sessionId: r.data.session_id,
+          method: 'qrcode',
+          status: 'waiting',
+          qrUrl: r.data.qr_url,
+          message: '请使用小红书APP扫描二维码'
+        }
+        setLoginSession(session)
+        message.info('二维码已生成，请扫码登录')
+        startPolling(session.sessionId, 'qrcode')
       } else {
-        message.warning(r.data.message)
+        message.error(r.data.message || '获取二维码失败')
       }
-    } catch {
-      message.error('获取二维码失败')
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '获取二维码失败')
     }
-    setBrowserLoading(false)
+    setLoginLoading(false)
   }
 
-  // ── 二次验证操作 ──────────────────────────────────────────────────────
+  // 开始浏览器扫码登录
+  const startBrowserLogin = async () => {
+    setLoginLoading(true)
+    setLoginSession(null)
+    try {
+      const r = await client.post('/login/browser/start')
+      if (r.data.success) {
+        const session: LoginSession = {
+          sessionId: r.data.session_id,
+          method: 'browser',
+          status: r.data.status,
+          qrImageB64: r.data.qr_image_b64,
+          qrUrl: r.data.qr_url,
+          message: '请使用小红书APP扫描二维码'
+        }
+        setLoginSession(session)
+        message.info('浏览器登录已启动，请扫码登录')
+        startPolling(session.sessionId, 'browser')
+      } else {
+        message.error(r.data.message || '启动浏览器登录失败')
+      }
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '启动浏览器登录失败')
+    }
+    setLoginLoading(false)
+  }
+
+  // 开始轮询
+  const startPolling = (sessionId: string, method: LoginMethod) => {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+    }
+
+    const timer = setInterval(async () => {
+      try {
+        if (method === 'qrcode') {
+          await pollQrcodeStatus(sessionId)
+        } else {
+          await pollBrowserStatus(sessionId)
+        }
+      } catch (e) {
+        console.error('轮询错误:', e)
+      }
+    }, 3000)
+
+    setPollTimer(timer)
+  }
+
+  // 轮询二维码登录状态
+  const pollQrcodeStatus = async (sessionId: string) => {
+    try {
+      const r = await client.post('/login/check', { session_id: sessionId })
+
+      if (r.data.success) {
+        // 登录成功
+        clearInterval(pollTimer!)
+        setPollTimer(null)
+
+        const newSession: LoginSession = {
+          ...loginSession!,
+          status: 'completed',
+          message: r.data.message,
+          cookies: r.data.cookies
+        }
+        setLoginSession(newSession)
+
+        // 保存Cookie
+        await saveCookies(r.data.cookies, r.data.message)
+      } else if (r.data.message?.includes('确认')) {
+        setLoginSession(prev => prev ? { ...prev, status: 'confirmed', message: r.data.message } : null)
+      } else {
+        setLoginSession(prev => prev ? { ...prev, message: r.data.message } : null)
+      }
+    } catch (e: any) {
+      console.error('检查二维码状态失败:', e)
+    }
+  }
+
+  // 轮询浏览器登录状态
+  const pollBrowserStatus = async (sessionId: string) => {
+    try {
+      const r = await client.post('/login/browser/check', { session_id: sessionId })
+
+      if (r.data.success) {
+        // 登录成功
+        clearInterval(pollTimer!)
+        setPollTimer(null)
+
+        const newSession: LoginSession = {
+          ...loginSession!,
+          status: 'completed',
+          message: r.data.message,
+          cookies: r.data.cookies
+        }
+        setLoginSession(newSession)
+
+        // 保存Cookie
+        await saveCookies(r.data.cookies, r.data.message)
+      } else if (r.data.status === 'secondary_verify') {
+        // 需要二次验证
+        setLoginSession(prev => prev ? {
+          ...prev,
+          status: 'secondary_verify',
+          message: r.data.message,
+          verificationType: r.data.verification_type,
+          verificationData: r.data.verification_data,
+          verificationScreenshotB64: r.data.verification_screenshot_b64
+        } : null)
+      } else if (r.data.status === 'failed') {
+        clearInterval(pollTimer!)
+        setPollTimer(null)
+        setLoginSession(prev => prev ? { ...prev, status: 'failed', message: r.data.message } : null)
+        message.error(r.data.message || '登录失败')
+      } else {
+        // 更新二维码图片（可能会刷新）
+        setLoginSession(prev => prev ? {
+          ...prev,
+          status: r.data.status || 'waiting',
+          message: r.data.message,
+          qrImageB64: r.data.qr_image_b64 || prev.qrImageB64,
+          qrUrl: r.data.qr_url || prev.qrUrl,
+          elapsed: r.data.elapsed
+        } : null)
+      }
+    } catch (e: any) {
+      console.error('检查浏览器登录状态失败:', e)
+    }
+  }
+
+  // 提交二次验证
   const submitVerification = async () => {
-    if (!verifyCode.trim() && verifyType !== 'device_qr') {
+    if (!verifyCode.trim()) {
       message.warning('请输入验证码')
       return
     }
-    setVerifyLoading(true)
+
+    setLoginLoading(true)
     try {
       const r = await client.post('/login/browser/verify', {
-        session_id: browserSession.session_id,
-        type: verifyType,
-        code: verifyCode.trim(),
+        session_id: loginSession!.sessionId,
+        type: loginSession!.verificationType || 'phone_sms',
+        code: verifyCode.trim()
       })
+
       if (r.data.success) {
         message.success('验证已提交，正在处理...')
         setVerifyCode('')
-        startBrowserPoll(browserSession.session_id)
+        // 继续轮询
+        setLoginSession(prev => prev ? { ...prev, status: 'waiting', verificationType: undefined } : null)
       } else {
-        message.error(r.data.message)
+        message.error(r.data.message || '验证失败')
       }
-    } catch {
-      message.error('提交验证失败')
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '验证失败')
     }
-    setVerifyLoading(false)
+    setLoginLoading(false)
   }
 
-  const confirmDeviceScan = async () => {
-    setVerifyLoading(true)
-    try {
-      await client.post('/login/browser/verify', {
-        session_id: browserSession.session_id,
-        type: 'device_qr',
-      })
-      message.info('已确认，等待页面跳转...')
-      startBrowserPoll(browserSession.session_id)
-    } catch {
-      message.error('确认失败')
-    }
-    setVerifyLoading(false)
-  }
-
+  // 刷新二维码（二次验证）
   const refreshVerification = async () => {
+    setLoginLoading(true)
     try {
-      await client.post('/login/browser/verify', {
-        session_id: browserSession.session_id,
+      const r = await client.post('/login/browser/verify', {
+        session_id: loginSession!.sessionId,
         type: 'refresh',
+        code: ''
       })
-      const check = await client.post('/login/browser/check', { session_id: browserSession.session_id })
-      if (check.data.verification_screenshot_b64) {
-        setVerifyScreenshot(check.data.verification_screenshot_b64)
+
+      if (r.data.success) {
+        message.info('已刷新，请重新扫描')
+        setLoginSession(prev => prev ? { ...prev, status: 'waiting', verificationType: undefined } : null)
       }
-      message.success('已刷新')
-    } catch {
+    } catch (e: any) {
       message.error('刷新失败')
     }
+    setLoginLoading(false)
   }
 
-  const cancelVerification = () => {
-    setVerifyType('')
-    setVerifyData(null)
-    setVerifyScreenshot('')
-    setVerifyCode('')
-    setBrowserSession(null)
-    setBrowserStatus('')
-    stopBrowserPoll()
-  }
-
-  // ── AI Model operations ─────────────────────────────────────────────
-  const onSaveAI = async (values: any) => {
-    setAiSaving(true)
+  // 保存Cookie到后端
+  const saveCookies = async (cookies: string, successMsg: string) => {
     try {
-      await client.post('/config', values)
-      message.success('AI配置已保存')
+      await client.post('/config', { cookies })
+      message.success(successMsg || '登录成功！Cookie已保存')
     } catch (e: any) {
-      message.error('保存失败: ' + (e.response?.data?.message || e.message))
+      message.error('Cookie保存失败: ' + (e.response?.data?.detail || e.message))
     }
-    setAiSaving(false)
   }
 
-  const onTestAI = async () => {
-    setAiTesting(true)
-    try {
-      const values = aiForm.getFieldsValue()
-      const r = await client.post('/config/test-ai', values)
-      if (r.data.success) message.success(r.data.message)
-      else message.warning(r.data.message)
-    } catch (e: any) {
-      message.error('AI测试失败: ' + (e.response?.data?.message || e.message))
+  // 停止登录
+  const stopLogin = async () => {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      setPollTimer(null)
     }
-    setAiTesting(false)
-  }
 
-  const onLoadModels = async () => {
-    try {
-      const values = aiForm.getFieldsValue()
-      const r = await client.post('/config/models', values)
-      if (r.data.success) {
-        setModels(r.data.models || [])
-        message.success(`获取到 ${r.data.models?.length || 0} 个模型`)
+    if (loginSession && loginSession.method === 'browser') {
+      try {
+        await client.post('/login/browser/stop', { session_id: loginSession.sessionId })
+      } catch (e) {
+        // ignore
       }
-    } catch {}
+    }
+
+    setLoginSession(null)
+    setVerifyCode('')
+    message.info('已停止登录')
   }
 
-  // ── Render ──────────────────────────────────────────────────────────
+  // 渲染登录方式选择
+  const renderLoginMethodSelector = () => (
+    <Segmented
+      options={[
+        {
+          label: <span><QrcodeOutlined /> 二维码登录</span>,
+          value: 'qrcode'
+        },
+        {
+          label: <span><GlobalOutlined /> 浏览器扫码登录</span>,
+          value: 'browser'
+        }
+      ]}
+      value={loginMethod}
+      onChange={(value) => {
+        if (loginSession && (loginSession.status === 'waiting' || loginSession.status === 'scanning')) {
+          stopLogin()
+        }
+        setLoginMethod(value as LoginMethod)
+      }}
+      style={{ marginBottom: 16 }}
+    />
+  )
 
-  const cookieStatusTag = cookieStatus === 'valid'
-    ? <Tag icon={<CheckCircleOutlined />} color="success">Cookie有效</Tag>
-    : cookieStatus === 'invalid'
-    ? <Tag icon={<CloseCircleOutlined />} color="error">Cookie无效</Tag>
-    : <Tag color="default">未检测</Tag>
+  // 渲染二维码登录界面
+  const renderQrcodeLogin = () => {
+    if (!loginSession || loginSession.method !== 'qrcode') {
+      return (
+        <Card>
+          <Space direction="vertical" size="large" style={{ width: '100%', textAlign: 'center' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="二维码登录"
+              description="使用小红书APP扫描二维码，快速登录"
+            />
+            <Button
+              type="primary"
+              size="large"
+              icon={<QrcodeOutlined />}
+              loading={loginLoading}
+              onClick={startQrcodeLogin}
+            >
+              获取二维码
+            </Button>
+          </Space>
+        </Card>
+      )
+    }
+
+    return renderLoginProgress()
+  }
+
+  // 渲染浏览器登录界面
+  const renderBrowserLogin = () => {
+    if (!loginSession || loginSession.method !== 'browser') {
+      return (
+        <Card>
+          <Space direction="vertical" size="large" style={{ width: '100%', textAlign: 'center' }}>
+            <Alert
+              type="warning"
+              showIcon
+              message="浏览器扫码登录"
+              description="使用Playwright启动真实浏览器，模拟扫码登录，可能需要处理二次验证"
+            />
+            <Button
+              type="primary"
+              size="large"
+              icon={<BrowserOutlined />}
+              loading={loginLoading}
+              onClick={startBrowserLogin}
+            >
+              启动浏览器登录
+            </Button>
+          </Space>
+        </Card>
+      )
+    }
+
+    return renderLoginProgress()
+  }
+
+  // 渲染登录进度
+  const renderLoginProgress = () => {
+    if (!loginSession) return null
+
+    const { status, message: msg, qrUrl, qrImageB64, verificationType, verificationData, verificationScreenshotB64 } = loginSession
+
+    return (
+      <Card>
+        <Space direction="vertical" size="large" style={{ width: '100%', textAlign: 'center' }}>
+          {/* 状态提示 */}
+          <Alert
+            type={
+              status === 'completed' ? 'success' :
+                status === 'failed' ? 'error' :
+                  status === 'secondary_verify' ? 'warning' : 'info'
+            }
+            showIcon
+            message={
+              status === 'completed' ? '登录成功' :
+                status === 'failed' ? '登录失败' :
+                  status === 'secondary_verify' ? '需要验证' :
+                    status === 'confirmed' ? '已确认，正在登录...' : '等待扫码'
+            }
+            description={msg}
+          />
+
+          {/* 二维码显示 */}
+          {(status === 'waiting' || status === 'scanning' || status === 'confirmed') && (
+            <div>
+              {loginMethod === 'qrcode' && qrUrl ? (
+                <Image
+                  src={qrUrl}
+                  alt="小红书登录二维码"
+                  style={{ maxWidth: 200, maxHeight: 200 }}
+                  fallback="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMIAAABCAYAAAB/EC+vAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAALEgAACxIB0t1+/AAAABZ0RVh0Q3JlYXRpb24gVGltZQAxMC8yOS8xMS42Vlx1AAAAAElFTkSuQmCC"
+                />
+              ) : loginMethod === 'browser' && qrImageB64 ? (
+                <Image
+                  src={`data:image/png;base64,${qrImageB64}`}
+                  alt="小红书登录二维码"
+                  style={{ maxWidth: 200, maxHeight: 200 }}
+                />
+              ) : (
+                <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
+              )}
+            </div>
+          )}
+
+          {/* 二次验证界面 */}
+          {status === 'secondary_verify' && (
+            <Card size="small" style={{ textAlign: 'left' }}>
+              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                <Alert
+                  type="warning"
+                  message="需要二次验证"
+                  description={verificationData?.message || '请完成验证'}
+                />
+
+                {/* 显示验证截图 */}
+                {verificationScreenshotB64 && (
+                  <div style={{ textAlign: 'center' }}>
+                    <Image
+                      src={`data:image/png;base64,${verificationScreenshotB64}`}
+                      alt="验证截图"
+                      style={{ maxWidth: '100%' }}
+                    />
+                  </div>
+                )}
+
+                {/* 验证码输入 */}
+                {verificationType === 'phone_sms' && (
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Text>请输入手机验证码：</Text>
+                    <Space>
+                      <Input
+                        placeholder="请输入验证码"
+                        value={verifyCode}
+                        onChange={e => setVerifyCode(e.target.value)}
+                        onPressEnter={submitVerification}
+                        style={{ width: 200 }}
+                      />
+                      <Button
+                        type="primary"
+                        onClick={submitVerification}
+                        loading={loginLoading}
+                      >
+                        提交
+                      </Button>
+                    </Space>
+                  </Space>
+                )}
+
+                {/* 刷新按钮（其他验证类型） */}
+                {verificationType !== 'phone_sms' && (
+                  <Button onClick={refreshVerification} loading={loginLoading}>
+                    刷新二维码
+                  </Button>
+                )}
+              </Space>
+            </Card>
+          )}
+
+          {/* 操作按钮 */}
+          <Space>
+            {status !== 'completed' && status !== 'failed' && (
+              <Button onClick={stopLogin}>停止登录</Button>
+            )}
+            {(status === 'completed' || status === 'failed') && (
+              <Button onClick={() => {
+                setLoginSession(null)
+                setVerifyCode('')
+              }}>
+                重新登录
+              </Button>
+            )}
+          </Space>
+        </Space>
+      </Card>
+    )
+  }
+
+  // ==================== 主渲染 ====================
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto' }}>
-      <Title level={4} style={{ marginBottom: 24 }}>
-        <UserOutlined style={{ marginRight: 8 }} />
-        用户中心
-      </Title>
+    <div style={{ padding: 24, maxWidth: 800, margin: '0 auto' }}>
+      <Title level={3}>👤 个人中心</Title>
 
-      <Tabs
-        defaultActiveKey="account"
-        items={[
-          {
-            key: 'account',
-            label: <span><LockOutlined /> 账号配置</span>,
-            children: (
-              <div>
-                {/* Status Card */}
-                <Card size="small" style={{ marginBottom: 16 }}>
-                  <Row gutter={24}>
-                    <Col span={8}>
-                      <Statistic
-                        title="小红书账号"
-                        value={cookieUser || '未登录'}
-                        prefix={cookieStatus === 'valid' ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> : <CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
-                      />
-                    </Col>
-                    <Col span={8}>
-                      <Statistic
-                        title="Cookie状态"
-                        value={cookieStatus === 'valid' ? '正常' : cookieStatus === 'invalid' ? '已失效' : '未检测'}
-                        valueStyle={{ color: cookieStatus === 'valid' ? '#52c41a' : cookieStatus === 'invalid' ? '#ff4d4f' : '#999' }}
-                      />
-                    </Col>
-                    <Col span={8}>
-                      <Space direction="vertical">
-                        <Button size="small" onClick={checkCookieStatus} loading={cookieTesting} icon={<ReloadOutlined />}>
-                          刷新状态
-                        </Button>
-                      </Space>
-                    </Col>
-                  </Row>
-                </Card>
+      <Tabs items={[
+        {
+          key: 'cookie',
+          label: <span><LockOutlined /> Cookie 管理</span>,
+          children: (
+            <Card>
+              <Alert
+                type="info"
+                showIcon
+                message="小红书 Cookie 用于内容采集和发布"
+                description={
+                  <div>
+                    <Paragraph style={{ margin: '4px 0 0' }}>
+                      从浏览器开发者工具（F12 → Network → 找到 xiaohongshu.com 请求 → Headers → Cookie）复制完整的 Cookie 字符串。
+                    </Paragraph>
+                    <Paragraph style={{ margin: '4px 0 0' }}>
+                      <Text strong>关键字段：</Text> web_session, a1, gid, webId
+                    </Paragraph>
+                  </div>
+                }
+                style={{ marginBottom: 16 }}
+              />
 
-                {/* Login Methods */}
-                <Card title="扫码登录" size="small" style={{ marginBottom: 16 }}>
-                  {!browserSession && !qrSession ? (
-                    <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                      <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                        推荐方式：打开小红书网页版或APP扫码登录，无需手动复制Cookie
-                      </Paragraph>
-                      <Space size="middle">
-                        <Button type="primary" loading={browserLoading}
-                          onClick={startBrowserLogin} icon={<QrcodeOutlined />}>
-                          启动浏览器登录
-                        </Button>
-                        <Button loading={browserLoading}
-                          onClick={startQrLogin} icon={<ReloadOutlined />}>
-                          获取登录二维码
-                        </Button>
-                      </Space>
-                    </div>
-                  ) : browserSession ? (
-                    <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                      {verifyType ? (
-                        /* 二次验证UI */
-                        <div>
-                          <Alert
-                            type="warning" showIcon
-                            message={verifyData?.message || '需要完成验证'}
-                            description={verifyData?.hint || '请完成页面上的验证'}
-                            style={{ marginBottom: 16, textAlign: 'left' }}
-                          />
-                          {verifyScreenshot && (
-                            <div style={{ marginBottom: 16 }}>
-                              <img
-                                src={`data:image/png;base64,${verifyScreenshot}`}
-                                style={{ maxWidth: '100%', maxHeight: 300, border: '1px solid #f0f0f0', borderRadius: 8 }}
-                                alt="验证截图"
-                              />
-                            </div>
-                          )}
-                          {(verifyType === 'phone_sms' || verifyType === 'captcha') && (
-                            <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                              <Input
-                                placeholder={verifyType === 'phone_sms' ? '请输入手机验证码' : '请输入图片验证码'}
-                                value={verifyCode}
-                                onChange={e => setVerifyCode(e.target.value)}
-                                size="large" maxLength={6}
-                              />
-                              <Button type="primary" block size="large" loading={verifyLoading}
-                                onClick={submitVerification}>
-                                提交验证码
-                              </Button>
-                            </Space>
-                          )}
-                          {verifyType === 'device_qr' && (
-                            <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                              <Paragraph type="secondary">
-                                请打开小红书APP，使用「扫一扫」扫描上方截图中的二维码
-                              </Paragraph>
-                              <Button type="primary" block size="large" loading={verifyLoading}
-                                onClick={confirmDeviceScan}>
-                                我已完成扫码
-                              </Button>
-                            </Space>
-                          )}
-                          <Space style={{ marginTop: 16 }}>
-                            <Button onClick={refreshVerification} icon={<ReloadOutlined />}>刷新截图</Button>
-                            <Button type="link" danger onClick={cancelVerification}>取消</Button>
-                          </Space>
-                        </div>
-                      ) : (
-                        /* 等待扫码UI */
-                        <div>
-                          <Spin size="large" />
-                          <Paragraph style={{ marginTop: 16 }}>{browserStatus}</Paragraph>
-                          {browserSession.qr_image_b64 && (
-                            <img src={`data:image/png;base64,${browserSession.qr_image_b64}`}
-                              style={{ width: 200, height: 200, border: '1px solid #f0f0f0', borderRadius: 8, marginTop: 8 }}
-                              alt="QR" />
-                          )}
-                          <div>
-                            <Button type="link" onClick={() => { stopBrowserPoll(); setBrowserSession(null); setBrowserStatus(''); setVerifyType('') }}>
-                              取消
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : qrSession ? (
-                    <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                      <Paragraph>{qrStatus}</Paragraph>
-                      {qrSession.qr_url ? (
-                        <div style={{ marginBottom: 16 }}>
-                          <QRCode value={qrSession.qr_url} size={180} />
-                        </div>
-                      ) : (
-                        <Spin size="large" />
-                      )}
-                      <Button type="link" onClick={() => { stopQrPoll(); setQrSession(null); setQrStatus('') }}>
-                        取消
-                      </Button>
-                    </div>
-                  ) : null}
-                </Card>
+              <Input.TextArea
+                rows={6}
+                value={cookieText}
+                onChange={e => setCookieText(e.target.value)}
+                placeholder="粘贴完整的Cookie字符串（如 a1=xxx; webId=xxx; web_session=xxx ...）"
+                style={{ fontFamily: 'monospace', fontSize: 12, marginBottom: 12 }}
+              />
 
-                {/* Manual Cookie Input */}
-                <Card title="手动输入Cookie" size="small">
-                  <Form form={cookieForm} onFinish={onSaveCookie} layout="vertical">
-                    <Form.Item name="cookies" label={
-                      <Space>
-                        <span>小红书 Cookie</span>
-                        {cookieStatusTag}
-                      </Space>
-                    }>
-                      <Input.TextArea
-                        rows={5}
-                        placeholder="粘贴完整的Cookie字符串（如 a1=xxx; webId=xxx; web_session=xxx ...）"
-                        style={{ fontFamily: 'monospace', fontSize: 12 }}
-                      />
-                    </Form.Item>
-                    <Form.Item>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        从浏览器开发者工具 (F12 → Network → 找到 xiaohongshu.com 请求 → Headers → Cookie) 复制
-                      </Text>
-                    </Form.Item>
-                    <Space>
-                      <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={cookieSaving}>
-                        保存Cookie
-                      </Button>
-                      <Button onClick={checkCookieStatus} loading={cookieTesting}>
-                        测试有效性
-                      </Button>
-                    </Space>
-                  </Form>
-                </Card>
-              </div>
-            ),
-          },
-          {
-            key: 'ai',
-            label: <span><RobotOutlined /> 大模型配置</span>,
-            children: (
-              <Card>
-                <Form form={aiForm} onFinish={onSaveAI} layout="vertical">
-                  <Form.Item name="llm_provider" label="AI服务商" initialValue="deepseek">
-                    <Select options={[
-                      { value: 'deepseek', label: 'DeepSeek' },
-                      { value: 'mimo', label: '小米MiMo' },
-                      { value: 'openai', label: 'OpenAI兼容' },
-                    ]} />
-                  </Form.Item>
-                  <Form.Item name="llm_api_key" label="API Key">
-                    <Input.Password placeholder="sk-..." />
-                  </Form.Item>
-                  <Form.Item name="llm_model" label="模型名称">
-                    <Select
-                      showSearch
-                      options={models.map(m => ({ value: m.id, label: m.name || m.id }))}
-                      placeholder="先配置服务商和Key，再点「获取模型列表」"
-                      notFoundContent="请先获取模型列表"
-                    />
-                  </Form.Item>
-                  <Form.Item name="llm_base_url" label={
-                    <Space>
-                      <span>Base URL</span>
-                      <Text type="secondary" style={{ fontSize: 12 }}>（可选，留空使用默认地址）</Text>
-                    </Space>
-                  }>
-                    <Input placeholder="https://api.example.com/v1" />
-                  </Form.Item>
+              <Space>
+                <Button
+                  type="primary"
+                  icon={<SaveOutlined />}
+                  loading={cookieSaving}
+                  onClick={saveCookie}
+                >
+                  保存 Cookie
+                </Button>
+                <Button
+                  icon={<CheckCircleOutlined />}
+                  loading={cookieTesting}
+                  onClick={testCookie}
+                >
+                  验证 Cookie
+                </Button>
+                {cookieStatus === 'valid' && <Tag color="green">{cookieUser}</Tag>}
+                {cookieStatus === 'invalid' && <Tag color="red">{cookieUser}</Tag>}
+              </Space>
+            </Card>
+          ),
+        },
+        {
+          key: 'xhs-login',
+          label: <span><QrcodeOutlined /> 小红书登录</span>,
+          children: (
+            <Space direction="vertical" size="large" style={{ width: '100%' }}>
+              {renderLoginMethodSelector()}
+
+              {loginMethod === 'qrcode' ? renderQrcodeLogin() : renderBrowserLogin()}
+            </Space>
+          ),
+        },
+        {
+          key: 'info',
+          label: <span><InfoCircleOutlined /> 关于</span>,
+          children: (
+            <Card>
+              <Descriptions column={1} bordered>
+                <Descriptions.Item label="平台名称">🥔 土豆小红书助手</Descriptions.Item>
+                <Descriptions.Item label="当前版本">v2.2.0</Descriptions.Item>
+                <Descriptions.Item label="当前用户">
                   <Space>
-                    <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={aiSaving}>
-                      保存配置
-                    </Button>
-                    <Button icon={<ThunderboltOutlined />} loading={aiTesting} onClick={onTestAI}>
-                      测试连接
-                    </Button>
-                    <Button onClick={onLoadModels}>
-                      获取模型列表
-                    </Button>
+                    <Tag icon={<UserOutlined />} color="blue">{username}</Tag>
+                    {role === 'admin' ? <Tag color="red">管理员</Tag> : <Tag>用户</Tag>}
                   </Space>
-                </Form>
-              </Card>
-            ),
-          },
-        ]}
-      />
+                </Descriptions.Item>
+                <Descriptions.Item label="技术栈">FastAPI + React 19 + SQLite + Playwright</Descriptions.Item>
+                <Descriptions.Item label="访问地址">
+                  <a href="https://xhs.maomaoxia.top" target="_blank" rel="noopener">xhs.maomaoxia.top</a>
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+          ),
+        },
+      ]} />
     </div>
   )
 }

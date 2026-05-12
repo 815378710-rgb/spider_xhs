@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import client from '../../api/client'
+import { useAuthStore } from '../../stores/auth'
 
 const { Header, Sider, Content } = Layout
 
@@ -71,6 +72,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { token: { colorBgContainer } } = theme.useToken()
+  const { username, role, logout } = useAuthStore()
 
   // ── Notification state ──────────────────────────────────────────────────
   const [unreadCount, setUnreadCount] = useState(0)
@@ -190,9 +192,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <Space size="middle">
             <Popover content={notificationContent} trigger="click" placement="bottomRight"
               open={notiPopoverOpen} onOpenChange={onNotiPopoverOpen}>
-              <Badge count={unreadCount} size="small" offset={[-2, 2]}>
-                <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} />
-              </Badge>
+              <span style={{ cursor: 'pointer' }}>
+                <Badge count={unreadCount} size="small" offset={[-2, 2]}>
+                  <BellOutlined style={{ fontSize: 18 }} />
+                </Badge>
+              </span>
             </Popover>
             <Dropdown
               menu={{
@@ -202,6 +206,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                     icon: <UserSwitchOutlined />,
                     label: '用户中心',
                   },
+                  ...(role === 'admin' ? [{
+                    key: 'admin',
+                    icon: <SettingOutlined />,
+                    label: '管理后台',
+                  }] : []),
                   { type: 'divider' },
                   {
                     key: 'logout',
@@ -213,8 +222,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 onClick: ({ key }) => {
                   if (key === 'user-center') {
                     navigate('/user-center')
+                  } else if (key === 'admin') {
+                    navigate('/admin')
                   } else if (key === 'logout') {
-                    localStorage.removeItem('xhs_cookie_configured')
+                    logout()
                     navigate('/login')
                   }
                 },
@@ -222,10 +233,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               trigger={['click']}
               placement="bottomRight"
             >
-              <Space style={{ cursor: 'pointer' }}>
+              <span style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <Avatar size="small" icon={<UserOutlined />} />
-                <span>Admin</span>
-              </Space>
+                <span>{username || '用户'}</span>
+              </span>
             </Dropdown>
           </Space>
         </Header>

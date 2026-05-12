@@ -40,6 +40,28 @@ async def start_scheduler():
         except Exception as e:
             logger.warning(f"Cookie巡检任务注册失败（非致命）: {e}")
 
+        # 注册a1自动续期任务（每8分钟）
+        try:
+            from core.config import settings
+            if settings.get_bool("A1_AUTO_REFRESH", True):
+                from services.a1_refresher import a1_refresher
+                interval_secs = settings.get_int("A1_REFRESH_INTERVAL", 480)
+
+                async def _a1_refresh_job():
+                    await a1_refresher.refresh()
+
+                _scheduler.add_job(
+                    _a1_refresh_job,
+                    IntervalTrigger(seconds=interval_secs),
+                    id='a1_auto_refresh',
+                    replace_existing=True,
+                )
+                logger.info(f"✅ a1自动续期任务已注册 (每{interval_secs}秒)")
+            else:
+                logger.info("ℹ️ a1自动续期已禁用 (A1_AUTO_REFRESH=false)")
+        except Exception as e:
+            logger.warning(f"a1续期任务注册失败（非致命）: {e}")
+
         # 启动时加载所有活跃的自动化流水线定时任务
         try:
             await _load_automation_jobs()

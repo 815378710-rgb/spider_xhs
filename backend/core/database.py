@@ -2,6 +2,7 @@
 SQLAlchemy async database setup
 """
 import os
+from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from core.config import settings, DATA_DIR
@@ -24,7 +25,25 @@ engine = create_async_engine(
     future=True,
 )
 
-async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+_async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@asynccontextmanager
+async def async_session():
+    """Auto-committing async session context manager.
+
+    Usage:
+        async with async_session() as db:
+            db.add(...)
+            # auto-committed on successful exit, auto-rolled-back on error
+    """
+    async with _async_session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 async def get_db():

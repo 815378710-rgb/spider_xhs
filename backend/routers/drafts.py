@@ -53,15 +53,21 @@ async def list_drafts(page: int = 1, page_size: int = 20, user=Depends(get_curre
 @router.post("")
 async def create_draft(req: DraftCreate, user=Depends(get_current_user)):
     async with async_session() as db:
-        draft = Draft(
-            title=req.title, content=req.content,
-            images_json=req.images_json, tags_json=req.tags_json,
-            source_note_id=req.source_note_id,
-        )
-        db.add(draft)
-        await db.flush()
-        await db.commit()
-        return {"success": True, "id": draft.id, "message": "草稿已创建"}
+        try:
+            draft = Draft(
+                title=req.title, content=req.content,
+                images_json=req.images_json, tags_json=req.tags_json,
+                source_note_id=req.source_note_id,
+            )
+            db.add(draft)
+            await db.flush()
+            await db.commit()
+            return {"success": True, "id": draft.id, "message": "草稿已创建"}
+        except Exception as e:
+            await db.rollback()
+            from loguru import logger
+            logger.error(f"创建草稿失败: {e}")
+            return {"success": False, "message": f"创建草稿失败: {str(e)[:100]}"}
 
 
 @router.put("/{draft_id}")
