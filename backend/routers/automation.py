@@ -118,7 +118,12 @@ async def run_automation(auto_id: int, user=Depends(get_current_user)):
         if not auto:
             return {"success": False, "message": "流水线不存在"}
     import asyncio
-    asyncio.create_task(_execute_pipeline(auto_id))
+    # P1-6 修复：包装asyncio.create_task，处理异常
+    try:
+        asyncio.create_task(_execute_pipeline(auto_id))
+    except Exception as e:
+        logger.exception(f"启动流水线失败: {e}")
+        return {"success": False, "message": f"启动失败: {str(e)[:100]}"}
     return {"success": True, "message": "流水线已启动"}
 
 
