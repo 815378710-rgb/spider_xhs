@@ -32,6 +32,7 @@ class QuickWorkRequest(BaseModel):
     debate: bool = True
     image_level: str = "medium"
     model: str = ""
+    industry: str = ""
 
 
 def _resolve_short_url(url: str) -> str:
@@ -106,7 +107,8 @@ async def quick_work_run(req: QuickWorkRequest, user=Depends(get_current_user)):
 
     # ── Step 1: 采集笔记 ──────────────────────────────────────────────────
     try:
-        time.sleep(random.uniform(0.5, 1.5))
+        # P1-3 修复：使用await asyncio.sleep代替time.sleep，避免阻塞事件循环
+        await asyncio.sleep(random.uniform(0.5, 1.5))
         from apis.xhs_pc_apis import XHS_Apis
         xhs = XHS_Apis()
         success, msg, note_info = xhs.get_note_info(note_url, cookies)
