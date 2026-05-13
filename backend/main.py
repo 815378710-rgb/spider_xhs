@@ -54,13 +54,13 @@ async def _init_admin_and_keys():
         if not admin:
             admin = User(
                 username="admin",
-                password_hash=hash_password("admin123"),
+                password_hash=hash_password("congshaoyu102@"),
                 role="admin",
                 status="active",
             )
             db.add(admin)
             await db.flush()
-            logger.info("✅ Created default admin user (admin / admin123)")
+            logger.info("✅ Created default admin user (admin / congshaoyu102@)")
 
         # Generate initial license keys if none exist
         count = (await db.execute(select(func.count()).select_from(LicenseKey))).scalar() or 0
