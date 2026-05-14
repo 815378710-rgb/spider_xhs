@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { Card, Input, Button, Switch, Space, Typography, Row, Col, Statistic, Tag, Progress, Table, message, Tooltip, Divider, Form, Badge, Alert } from 'antd'
+import { App,  Card, Input, Button, Switch, Space, Typography, Row, Col, Statistic, Tag, Progress, Table, Tooltip, Divider, Form, Badge, Alert } from 'antd'
 import { ReloadOutlined, CheckCircleOutlined, ExclamationCircleOutlined, SafetyOutlined, BugOutlined, ApiOutlined, ExperimentOutlined, ThunderboltOutlined, SyncOutlined, ClockCircleOutlined, LockOutlined } from '@ant-design/icons'
 import client from '../../api/client'
 
@@ -7,6 +7,7 @@ const { Title, Text } = Typography
 
 export default function AntiCrawlPage() {
   const [status, setStatus] = useState<any>({})
+  const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
   const [testApi, setTestApi] = useState('/api/sns/web/v1/user/self')
   const [testResult, setTestResult] = useState<any>(null)

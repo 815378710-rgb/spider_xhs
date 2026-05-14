@@ -23,25 +23,15 @@ import LogsPage from './pages/Logs'
 import ContentCheckPage from './pages/ContentCheck'
 import TopicRecommendPage from './pages/TopicRecommend'
 import UserCenterPage from './pages/UserCenter'
-import AdminPage from './pages/Admin'
+import QianFanPage from './pages/QianFan'  // 千帆分销
+import ProxyPage from './pages/Proxy'        // 浏览器代理
+import CookiePoolPage from './pages/CookiePool' // Cookie 池管理
 import { useAuthStore } from './stores/auth'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isLoggedIn = useAuthStore(s => s.isLoggedIn)
   if (!isLoggedIn) {
     return <Navigate to="/login" replace />
-  }
-  return <>{children}</>
-}
-
-function AdminRoute({ children }: { children: React.ReactNode }) {
-  const role = useAuthStore(s => s.role)
-  const isLoggedIn = useAuthStore(s => s.isLoggedIn)
-  if (!isLoggedIn) {
-    return <Navigate to="/login" replace />
-  }
-  if (role !== 'admin') {
-    return <Navigate to="/" replace />
   }
   return <>{children}</>
 }
@@ -59,13 +49,6 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/admin" element={
-              <AdminRoute>
-                <AppLayout>
-                  <AdminPage />
-                </AppLayout>
-              </AdminRoute>
-            } />
             <Route path="*" element={
               <ProtectedRoute>
                 <AppLayout>
@@ -88,6 +71,9 @@ export default function App() {
                     <Route path="/logs" element={<LogsPage />} />
                     <Route path="/content-check" element={<ContentCheckPage />} />
                     <Route path="/topics" element={<TopicRecommendPage />} />
+<Route path="/qianfan" element={<QianFanPage />} />
+<Route path="/proxy" element={<ProxyPage />} />
+                    <Route path="/cookie-pool" element={<CookiePoolPage />} />
                     <Route path="/user-center" element={<UserCenterPage />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>

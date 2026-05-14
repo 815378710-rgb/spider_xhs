@@ -7,6 +7,7 @@ import json
 import os
 import re
 import threading
+import asyncio
 from abc import ABC, abstractmethod
 from loguru import logger
 
@@ -22,7 +23,7 @@ class LLMBackend(ABC):
     """大模型后端抽象接口"""
 
     @abstractmethod
-    def chat(self, system_prompt: str, user_prompt: str) -> str:
+    async def chat(self, system_prompt: str, user_prompt: str) -> str:
         ...
 
     @property
@@ -52,7 +53,7 @@ class DeepSeekBackend(LLMBackend):
     def name(self) -> str:
         return f"DeepSeek/{self.model}"
 
-    def chat(self, system_prompt: str, user_prompt: str) -> str:
+    async def chat(self, system_prompt: str, user_prompt: str) -> str:
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -67,8 +68,15 @@ class DeepSeekBackend(LLMBackend):
             "temperature": 0.8,
             "max_tokens": 2000,
         }
-        resp = requests.request('POST', url, headers=headers, json=body, timeout=60)
-        resp.raise_for_status()
+        for attempt in range(3):
+            try:
+                resp = await asyncio.to_thread(requests.request, 'POST', url, headers=headers, json=body, timeout=60)
+                resp.raise_for_status()
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** attempt)
         return resp.json()["choices"][0]["message"]["content"].strip()
 
 
@@ -96,7 +104,7 @@ class MiMoBackend(LLMBackend):
     def name(self) -> str:
         return f"MiMo/{self.model}"
 
-    def chat(self, system_prompt: str, user_prompt: str) -> str:
+    async def chat(self, system_prompt: str, user_prompt: str) -> str:
         url = f"{self.base_url}/chat/completions"
         # 小米官方兼容 OpenAI 格式，优先用 Bearer，401 时自动降级 api-key
         headers = {
@@ -114,12 +122,19 @@ class MiMoBackend(LLMBackend):
         }
         # 推理模型需要更多 token（大量 token 用于思考过程）
         body["max_tokens"] = 8000
-        resp = requests.request('POST', url, headers=headers, json=body, timeout=120)
-        if resp.status_code == 401:
-            headers.pop("Authorization", None)
-            headers["api-key"] = self.api_key
-            resp = requests.request('POST', url, headers=headers, json=body, timeout=120)
-        resp.raise_for_status()
+        for attempt in range(3):
+            try:
+                resp = await asyncio.to_thread(requests.request, 'POST', url, headers=headers.copy(), json=body, timeout=120)
+                if resp.status_code == 401:
+                    headers.pop("Authorization", None)
+                    headers["api-key"] = self.api_key
+                    resp = await asyncio.to_thread(requests.request, 'POST', url, headers=headers.copy(), json=body, timeout=120)
+                resp.raise_for_status()
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** attempt)
         msg = resp.json()["choices"][0]["message"]
         # 推理模型 content 可能为空，取 reasoning_content
         return (msg.get("content") or msg.get("reasoning_content") or "").strip()
@@ -140,7 +155,7 @@ class OpenAICompatBackend(LLMBackend):
     def name(self) -> str:
         return self._name
 
-    def chat(self, system_prompt: str, user_prompt: str) -> str:
+    async def chat(self, system_prompt: str, user_prompt: str) -> str:
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -155,8 +170,15 @@ class OpenAICompatBackend(LLMBackend):
             "temperature": 0.8,
             "max_tokens": 2000,
         }
-        resp = requests.request('POST', url, headers=headers, json=body, timeout=60)
-        resp.raise_for_status()
+        for attempt in range(3):
+            try:
+                resp = await asyncio.to_thread(requests.request, 'POST', url, headers=headers, json=body, timeout=60)
+                resp.raise_for_status()
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** attempt)
         return resp.json()["choices"][0]["message"]["content"].strip()
 
 
@@ -360,7 +382,7 @@ def _get_ratio_instruction(ratio: int) -> str:
         return "【改写比例：全面重塑（约90%）】\n仅保留产品核心信息（品名、价格、核心功效），其余完全重新创作。标题、开头、正文结构、结尾全部重写，像写一篇全新的笔记。"
 
 
-def rewrite_note(title: str, desc: str, backend: LLMBackend,
+async def rewrite_note(title: str, desc: str, backend: LLMBackend,
                  extra_instructions: str = None, style: str = "保持原风格",
                  ratio: int = 50, industry: str = "") -> dict:
     """
@@ -401,7 +423,7 @@ def rewrite_note(title: str, desc: str, backend: LLMBackend,
         user_prompt += f"\n\n【用户额外要求】{extra_instructions}"
 
     logger.info(f"正在使用 {backend.name} 改写文案 (风格: {style}, 比例: {ratio}%, 行业: {industry or '通用'})...")
-    raw = backend.chat(SYSTEM_PROMPT, user_prompt)
+    raw = await backend.chat(SYSTEM_PROMPT, user_prompt)
 
     # 解析 JSON 响应
     result = _parse_response(raw)
@@ -412,7 +434,7 @@ def rewrite_note(title: str, desc: str, backend: LLMBackend,
     return result
 
 
-def rewrite_batch(notes: list, backend: LLMBackend,
+async def rewrite_batch(notes: list, backend: LLMBackend,
                   extra_instructions: str = None) -> list:
     """
     批量改写笔记
@@ -429,7 +451,7 @@ def rewrite_batch(notes: list, backend: LLMBackend,
     for i, note in enumerate(notes):
         logger.info(f"改写进度: {i + 1}/{len(notes)}")
         try:
-            result = rewrite_note(note["title"], note["desc"], backend, extra_instructions)
+            result = await rewrite_note(note["title"], note["desc"], backend, extra_instructions)
             results.append(result)
         except Exception as e:
             logger.error(f"第 {i + 1} 篇改写失败: {e}")
@@ -552,7 +574,7 @@ def _agent_rewrite_single(agent_key: str, title: str, desc: str, style: str,
             user_prompt += f"\n\n{style_instruction}"
 
         logger.info(f"[Agent {agent_key}:{profile['name']}] 开始改写...")
-        raw = backend.chat(profile["system_prompt"], user_prompt)
+        raw = asyncio.run(backend.chat(profile["system_prompt"], user_prompt))
         result = _parse_response(raw)
         result["agent"] = agent_key
         result["agent_name"] = profile["name"]
@@ -566,7 +588,7 @@ def _agent_rewrite_single(agent_key: str, title: str, desc: str, style: str,
                                "error": str(e)}
 
 
-def rewrite_with_debate(title: str, desc: str, backend: LLMBackend,
+async def rewrite_with_debate(title: str, desc: str, backend: LLMBackend,
                         style: str = "保持原风格", ratio: int = 50) -> dict:
     """
     Agent 辩论改写：3个Agent并行改写 → 评审Agent打分 → 输出最优方案
@@ -630,7 +652,7 @@ def rewrite_with_debate(title: str, desc: str, backend: LLMBackend,
     judge_prompt = f"请评审以下3个改写版本，目标风格：{style}，改写比例：{ratio}%\n{versions_text}"
 
     try:
-        judge_raw = backend.chat(JUDGE_SYSTEM_PROMPT, judge_prompt)
+        judge_raw = await backend.chat(JUDGE_SYSTEM_PROMPT, judge_prompt)
         # 尝试解析评审结果
         judge_result = _parse_judge_response(judge_raw)
         logger.info(f"评审完成，获胜者: {judge_result.get('winner', 'A')}")
@@ -762,7 +784,7 @@ def get_industry_prompt(industry: str) -> str:
     return INDUSTRY_PROMPTS.get(industry, "")
 
 
-def optimize_title(title: str, backend, industry: str = "") -> dict:
+async def optimize_title(title: str, backend, industry: str = "") -> dict:
     """
     专门优化标题，运用数字+emoji+悬念词公式
 
@@ -800,7 +822,7 @@ def optimize_title(title: str, backend, industry: str = "") -> dict:
         user_prompt += f"\n\n{industry_prompt}"
 
     try:
-        raw = backend.chat(system_prompt, user_prompt)
+        raw = await backend.chat(system_prompt, user_prompt)
         result = json.loads(re.search(r'\{.*\}', raw, re.DOTALL).group())
         return result
     except Exception as e:
@@ -811,23 +833,19 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
 
-    # 方式1：从环境变量自动创建
-    # backend = create_backend_from_env()
-
-    # 方式2：直接指定（DeepSeek V3 或 V4）
     backend = create_backend(
         "deepseek",
-        api_key="sk-你的key",
-        model="deepseek-v3"   # 或 "deepseek-v4"
+        api_key=os.environ.get("LLM_API_KEY", ""),
+        model="deepseek-v3"
     )
-    # MiMo V2 Pro 或 V2 Flash：
-    # backend = create_backend("mimo", api_key="你的key", model="mimo-v2-pro")
 
-    # 改写单篇
-    result = rewrite_note(
-        title="夏天必入的防晒霜！SPF50+清爽不油腻",
-        desc="姐妹们！这款防晒霜真的绝了！SPF50+ PA++++的高倍防晒，上脸一点都不油腻，成膜超快...",
-        backend=backend,
-        extra_instructions="语气更活泼一点，多加emoji"
-    )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    async def _main():
+        result = await rewrite_note(
+            title="夏天必入的防晒霜！SPF50+清爽不油腻",
+            desc="姐妹们！这款防晒霜真的绝了！SPF50+ PA++++的高倍防晒，上脸一点都不油腻，成膜超快...",
+            backend=backend,
+            extra_instructions="语气更活泼一点，多加emoji"
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    asyncio.run(_main())

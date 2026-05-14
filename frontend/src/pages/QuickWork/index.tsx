@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Card, Input, Button, Typography, Space, Slider, Switch, Select, Tag, Collapse, Divider, message, Progress, Image, Spin, Tabs, List, Statistic, Row, Col, Tooltip, Empty } from 'antd'
+import { App,  Card, Input, Button, Typography, Space, Slider, Switch, Select, Tag, Collapse, Divider, Progress, Image, Spin, Tabs, List, Statistic, Row, Col, Tooltip, Empty } from 'antd'
 import { LinkOutlined, ThunderboltOutlined, EditOutlined, PictureOutlined, RocketOutlined, CopyOutlined, CheckOutlined, SendOutlined, SaveOutlined, SafetyCertificateOutlined, RobotOutlined, WarningOutlined, ExclamationCircleOutlined, CheckCircleOutlined, StarOutlined, StarFilled, DownloadOutlined } from '@ant-design/icons'
 import client from '../../api/client'
 
@@ -75,6 +75,7 @@ function ScoreBreakdown({ scoreValue }: { scoreValue: any }) {
 
 function loadResult(): QuickWorkResult | null {
   try {
+  const { message } = App.useApp()
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) return JSON.parse(raw)
   } catch {}
@@ -83,6 +84,7 @@ function loadResult(): QuickWorkResult | null {
 
 function saveResult(result: QuickWorkResult | null) {
   try {
+  const { message } = App.useApp()
     if (result) localStorage.setItem(STORAGE_KEY, JSON.stringify(result))
     else localStorage.removeItem(STORAGE_KEY)
   } catch {}

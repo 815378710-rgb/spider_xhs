@@ -5,7 +5,8 @@ import {
   PictureOutlined, SendOutlined, ThunderboltOutlined,
   EyeOutlined, SettingOutlined, BugOutlined,
   BellOutlined, UserOutlined, RobotOutlined, RocketOutlined,
-  CheckOutlined, SafetyCertificateOutlined, FileTextOutlined, BulbOutlined,
+  CheckOutlined,   SafetyCertificateOutlined, FileTextOutlined, BulbOutlined,
+  CloudServerOutlined, AppstoreOutlined,
   UserSwitchOutlined, LogoutOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -33,6 +34,7 @@ const menuItems = [
       { key: '/kol', icon: <RobotOutlined />, label: 'KOL搜索' },
       { key: '/topics', icon: <BulbOutlined />, label: '选题推荐' },
       { key: '/monitor', icon: <EyeOutlined />, label: '竞品监控' },
+      { key: '/qianfan', icon: <RocketOutlined />, label: '千帆分销' },
     ],
   },
   {
@@ -59,10 +61,12 @@ const menuItems = [
     type: 'group' as const,
     children: [
       { key: '/accounts', icon: <TeamOutlined />, label: '账号管理' },
+      { key: '/cookie-pool', icon: <AppstoreOutlined />, label: 'Cookie 池' },
       { key: '/anti-crawl', icon: <BugOutlined />, label: '反爬配置' },
       { key: '/content-check', icon: <SafetyCertificateOutlined />, label: '内容检测' },
       { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
       { key: '/logs', icon: <FileTextOutlined />, label: '运行日志' },
+      { key: '/proxy', icon: <CloudServerOutlined />, label: '浏览器代理' },
     ],
   },
 ]
@@ -206,11 +210,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                     icon: <UserSwitchOutlined />,
                     label: '用户中心',
                   },
-                  ...(role === 'admin' ? [{
-                    key: 'admin',
-                    icon: <SettingOutlined />,
-                    label: '管理后台',
-                  }] : []),
                   { type: 'divider' },
                   {
                     key: 'logout',
@@ -222,8 +221,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 onClick: ({ key }) => {
                   if (key === 'user-center') {
                     navigate('/user-center')
-                  } else if (key === 'admin') {
-                    navigate('/admin')
                   } else if (key === 'logout') {
                     logout()
                     navigate('/login')

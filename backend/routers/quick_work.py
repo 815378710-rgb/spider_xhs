@@ -1,7 +1,7 @@
 """
-一站式工作台 — 采集 → AI改写 → 图片降重
-复刻 v1 核心体验：粘贴链接，一键完成
-支持异步任务模式：后台线程执行 + 任务ID + 轮询接口
+One-stop workbench - Collect -> AI rewrite -> Image dedup
+Replicates v1 core experience: paste link, one-click complete
+Supports async task mode: background thread + task ID + polling API
 """
 import os
 import time
@@ -13,21 +13,26 @@ import uuid
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
+from sqlalchemy import select
 from core.config import settings
 from core.deps import get_current_user
+from core.database import async_session
 from loguru import logger
 
 router = APIRouter()
 
-# ── 异步任务存储 ──────────────────────────────────────────────────────────
-# 任务状态: pending / running / completed / failed
+# Async task storage
+# Task status: pending / running / completed / failed
+# Module-level state - protected by TASK_LOCK (threading.Lock).
+# threading.Lock is correct here because _run_quick_work_task runs in
+# background threads (not on the async event loop).
 ASYNC_TASKS: dict[str, dict] = {}
 TASK_LOCK = threading.Lock()
 
 
 class QuickWorkRequest(BaseModel):
     url: str
-    style: str = "保持原风格"
+    style: str = "maintain original style"
     ratio: int = 50
     debate: bool = True
     image_level: str = "medium"
@@ -36,7 +41,7 @@ class QuickWorkRequest(BaseModel):
 
 
 def _resolve_short_url(url: str) -> str:
-    """解析小红书短链接"""
+    """Resolve XHS short link"""
     if "xhslink.com" not in url:
         return url
     try:
@@ -52,49 +57,81 @@ def _resolve_short_url(url: str) -> str:
         return url
 
 
-def _download_image(url: str) -> str:
-    """下载小红书CDN图片到本地"""
-    import requests as req
-    save_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "images")
+def _download_image(url: str, cookies_str: str = "") -> str:
+    """Download XHS CDN image to local (with Cookie + multi-header strategy)"""
+    from curl_cffi import requests as req
+    if url.startswith("http://"):
+        url = url.replace("http://", "https://", 1)
+    if not cookies_str:
+        cookies_str = settings.COOKIES or ""
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    save_dir = os.path.join(project_root, "backend", "data", "images")
     os.makedirs(save_dir, exist_ok=True)
     filename = f"img_{int(time.time() * 1000)}_{random.randint(1000, 9999)}.jpg"
     filepath = os.path.join(save_dir, filename)
 
+    cookie_dict = {}
+    for pair in cookies_str.split(";"):
+        pair = pair.strip()
+        if "=" in pair:
+            k, _, v = pair.partition("=")
+            cookie_dict[k.strip()] = v.strip()
+
     header_sets = [
-        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
-         "Referer": "https://www.xiaohongshu.com/"},
-        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-         "Referer": "https://www.xiaohongshu.com/"},
-        {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"},
-        {},
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+            "Referer": "https://www.xiaohongshu.com/",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "sec-ch-ua": '"Not.A/Brand";v="99", "Google Chrome";v="147", "Chromium";v="147"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "image",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "cross-site",
+        },
+        {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            "Referer": "https://www.xiaohongshu.com/",
+            "Accept": "image/*,*/*",
+        },
     ]
     for headers in header_sets:
         try:
-            resp = req.request("GET", url, headers=headers, timeout=20)
+            resp = req.request("GET", url, headers=headers, cookies=cookie_dict, 
+                             impersonate="chrome120", timeout=20)
+            logger.info(f"[_download_image] {url[:60]} status={resp.status_code} len={len(resp.content)}")
             if resp.status_code == 200 and len(resp.content) > 1000:
                 with open(filepath, "wb") as f:
                     f.write(resp.content)
+                logger.info(f"[_download_image] saved: {filepath} ({len(resp.content)} bytes)")
                 return f"/data/images/{filename}"
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[_download_image] attempt failed: {url[:60]} -> {e}")
             continue
-    raise RuntimeError(f"图片下载失败: {url[:60]}")
+    raise RuntimeError(f"Image download failed: {url[:60]}")
 
 
 def _process_image_bytes(img_bytes: bytes, level: str) -> bytes:
-    """调用图片防重处理"""
+    """Call image dedup processing"""
     from utils.image_processor import process_image
     return process_image(img_bytes, level)
 
 
 @router.post("/run")
 async def quick_work_run(req: QuickWorkRequest, user=Depends(get_current_user)):
-    """
-    一站式：采集笔记 → AI改写 → 图片降重
-    返回完整结果
-    """
-    cookies = settings.COOKIES
+    """One-stop: collect note -> AI rewrite -> image dedup, return full result"""
+    user_id = int(user["sub"])
+    user_cookie = ""
+    async with async_session() as db:
+        from models.user import User
+        result = await db.execute(select(User).where(User.id == user_id))
+        u = result.scalar_one_or_none()
+        if u:
+            user_cookie = u.cookie or ""
+    cookies = user_cookie or settings.COOKIES
     if not cookies:
-        return {"success": False, "message": "Cookie 未配置，请先在设置中添加小红书 Cookie"}
+        return {"success": False, "message": "Cookie not configured"}
 
     note_url = _resolve_short_url(req.url.strip())
     result = {
@@ -105,15 +142,14 @@ async def quick_work_run(req: QuickWorkRequest, user=Depends(get_current_user)):
         "debate": None,
     }
 
-    # ── Step 1: 采集笔记 ──────────────────────────────────────────────────
+    # Step 1: Collect note
     try:
-        # P1-3 修复：使用await asyncio.sleep代替time.sleep，避免阻塞事件循环
         await asyncio.sleep(random.uniform(0.5, 1.5))
         from apis.xhs_pc_apis import XHS_Apis
         xhs = XHS_Apis()
         success, msg, note_info = xhs.get_note_info(note_url, cookies)
         if not success:
-            return {"success": False, "message": f"采集失败: {msg}"}
+            return {"success": False, "message": f"Collection failed: {msg}"}
 
         items = note_info.get("data", {}).get("items", [])
         if items:
@@ -122,14 +158,13 @@ async def quick_work_run(req: QuickWorkRequest, user=Depends(get_current_user)):
         else:
             note_card = note_info.get("data", {}).get("note_card", None)
             if not note_card:
-                return {"success": False, "message": "笔记数据为空，请检查链接是否有效"}
+                return {"success": False, "message": "Note data is empty"}
             note = note_info["data"]
 
         title = note_card.get("title", "")
         desc = note_card.get("desc", "")
         author = note_card.get("user", {}).get("nickname", "")
 
-        # 提取图片
         raw_images = []
         for img in note_card.get("image_list", []):
             info_list = img.get("info_list", [])
@@ -154,27 +189,27 @@ async def quick_work_run(req: QuickWorkRequest, user=Depends(get_current_user)):
         }
 
     except Exception as e:
-        logger.exception(f"采集异常: {e}")
-        return {"success": False, "message": f"采集异常: {str(e)[:100]}"}
+        logger.exception(f"Collection error: {e}")
+        return {"success": False, "message": f"Collection error: {str(e)[:100]}"}
 
-    # ── Step 2: 下载原图 ──────────────────────────────────────────────────
+    # Step 2: Download original images
     images = []
     for img_url in raw_images:
         try:
-            local_path = _download_image(img_url)
+            local_path = _download_image(img_url, cookies)
             images.append(local_path)
         except Exception as e:
-            logger.warning(f"图片下载失败: {img_url[:60]} -> {e}")
-            images.append(img_url)  # fallback to CDN URL
+            logger.warning(f"Image download failed: {img_url[:60]} -> {e}")
+            images.append(img_url)
     result["images_original"] = images
 
-    # ── Step 3: AI 改写 ──────────────────────────────────────────────────
+    # Step 3: AI rewrite
     llm = settings.get_llm_config()
     if not llm.get("api_key"):
         return {
             "success": True,
             "data": result,
-            "message": "采集完成（AI API Key 未配置，跳过改写）",
+            "message": "Collection complete (AI API Key not configured, skip rewrite)",
         }
 
     try:
@@ -183,76 +218,104 @@ async def quick_work_run(req: QuickWorkRequest, user=Depends(get_current_user)):
         backend = create_backend(llm["provider"], llm["api_key"],
                                  model=model_override, base_url=llm["base_url"])
         if not backend:
-            result["rewritten"] = {"title": "(AI 后端创建失败)", "desc": ""}
+            result["rewritten"] = {"title": "(AI backend creation failed)", "desc": ""}
         elif req.debate:
-            debate_result = rewrite_with_debate(title, desc, backend,
+            debate_result = await rewrite_with_debate(title, desc, backend,
                                                 style=req.style, ratio=req.ratio)
             result["debate"] = debate_result
             result["rewritten"] = debate_result.get("winner", {})
         else:
-            result["rewritten"] = rewrite_note(title, desc, backend,
+            result["rewritten"] = await rewrite_note(title, desc, backend,
                                                style=req.style, ratio=req.ratio)
     except Exception as e:
-        logger.exception(f"AI 改写异常: {e}")
-        result["rewritten"] = {"title": f"(改写失败: {str(e)[:50]})", "desc": ""}
+        logger.exception(f"AI rewrite error: {e}")
+        result["rewritten"] = {"title": f"(Rewrite failed: {str(e)[:50]})", "desc": ""}
 
-    # ── Step 4: 图片降重 ──────────────────────────────────────────────────
+    # Step 4: Image dedup
     processed_images = []
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    data_dir = os.path.join(project_root, "backend", "data")
     processed_dir = os.path.join(data_dir, "processed")
     os.makedirs(processed_dir, exist_ok=True)
 
+    step4_cookies = cookies
+    cookie_dict = {}
+    for pair in step4_cookies.split(";"):
+        pair = pair.strip()
+        if "=" in pair:
+            k, _, v = pair.partition("=")
+            cookie_dict[k.strip()] = v.strip()
+
     for i, img_path in enumerate(images):
         try:
-            if img_path.startswith("/data/"):
-                fs_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), img_path.lstrip("/"))
-                with open(fs_path, "rb") as f:
-                    img_bytes = f.read()
-            elif img_path.startswith("/"):
-                fs_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), img_path.lstrip("/"))
-                with open(fs_path, "rb") as f:
-                    img_bytes = f.read()
+            if img_path.startswith("/data/") or img_path.startswith("/"):
+                fs_path = os.path.join(project_root, "backend", img_path.lstrip("/"))
+                logger.info(f"[Step4] Reading local image: {fs_path}")
+                if not os.path.exists(fs_path):
+                    logger.warning(f"[Step4] Local file not found: {fs_path}")
+                    img_bytes = None
+                else:
+                    with open(fs_path, "rb") as f:
+                        img_bytes = f.read()
             else:
-                # CDN URL — 尝试下载
                 img_bytes = None
-                import requests as req
+
+            if not img_bytes or len(img_bytes) < 100:
+                logger.info(f"[Step4] Trying CDN download: {img_path[:80]}")
+                from curl_cffi import requests as req
+                cdn_url = img_path
+                if cdn_url.startswith("http://"):
+                    cdn_url = cdn_url.replace("http://", "https://", 1)
                 for headers in [
-                    {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                     "Referer": "https://www.xiaohongshu.com/"},
-                    {},
+                    {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+                        "Referer": "https://www.xiaohongshu.com/",
+                        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    },
+                    {
+                        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+                        "Referer": "https://www.xiaohongshu.com/",
+                        "Accept": "image/*,*/*",
+                    },
                 ]:
                     try:
-                        resp = req.request("GET", img_path, headers=headers, timeout=20)
+                        resp = req.request("GET", cdn_url, headers=headers, cookies=cookie_dict,
+                                         impersonate="chrome120", timeout=20)
+                        logger.info(f"[Step4] CDN download status: {resp.status_code} len={len(resp.content)}")
                         if resp.status_code == 200 and len(resp.content) > 1000:
                             img_bytes = resp.content
                             break
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"[Step4] CDN download failed: {e}")
                         continue
 
             if not img_bytes or len(img_bytes) < 100:
-                processed_images.append({"original": img_path, "processed": None, "error": "图片数据无效"})
+                logger.error(f"[Step4] Invalid image data: {img_path[:80]} (bytes={len(img_bytes) if img_bytes else 0})")
+                processed_images.append({"original": img_path, "processed": None, "error": "Invalid image data"})
                 continue
 
+            logger.info(f"[Step4] Processing image {i+1}: {len(img_bytes)} bytes, level={req.image_level}")
             processed_bytes = _process_image_bytes(img_bytes, req.image_level)
             filename = f"processed_{int(time.time())}_{i}.jpg"
             filepath = os.path.join(processed_dir, filename)
             with open(filepath, "wb") as f:
                 f.write(processed_bytes)
+            logger.info(f"[Step4] Image processing successful: {filepath} ({len(processed_bytes)} bytes)")
             processed_images.append({
                 "original": img_path,
                 "processed": f"/data/processed/{filename}",
             })
         except Exception as e:
-            logger.warning(f"图片降重失败: {img_path[:60]} -> {e}")
+            logger.exception(f"[Step4] Image dedup failed: {img_path[:60]} -> {e}")
             processed_images.append({"original": img_path, "processed": None, "error": str(e)[:80]})
 
     result["images_processed"] = processed_images
 
-    # ── 统计更新 ──────────────────────────────────────────────────────────
+    # Stats update
     try:
-        from core.database import async_session
+        from core.database import async_session as _async_session
         from models.task_log import TaskLog
-        async with async_session() as db:
+        async with _async_session() as db:
             log = TaskLog(
                 task_type="quick_work",
                 status="success",
@@ -270,20 +333,20 @@ async def quick_work_run(req: QuickWorkRequest, user=Depends(get_current_user)):
     return {
         "success": True,
         "data": result,
-        "message": f"完成！采集: {title[:20]}... | {len(images)}张图 | {'已改写' if result['rewritten'] else '未改写'}",
+        "message": f"Complete! Collection: {title[:20]}... | {len(images)} images | {'Rewritten' if result['rewritten'] else 'Not rewritten'}",
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  异步任务模式 — 后台线程 + 任务ID + 轮询
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+#  Async task mode - background thread + task ID + polling
+# ==============================================================================
 
 def _run_quick_work_task(task_id: str, req_data: dict):
-    """在后台线程中执行一站式工作台任务"""
-    cookies = settings.COOKIES
+    """Execute one-stop workbench task in background thread"""
+    cookies = req_data.get("_cookies", "") or settings.COOKIES
     if not cookies:
         with TASK_LOCK:
-            ASYNC_TASKS[task_id].update(status="failed", error="Cookie 未配置")
+            ASYNC_TASKS[task_id].update(status="failed", error="Cookie not configured")
         return
 
     note_url = _resolve_short_url(req_data["url"].strip())
@@ -299,16 +362,16 @@ def _run_quick_work_task(task_id: str, req_data: dict):
         with TASK_LOCK:
             ASYNC_TASKS[task_id].update(step=step, progress=progress)
 
-    # ── Step 1: 采集笔记 ──────────────────────────────────────────────────
+    # Step 1: Collect note
     try:
-        _update("正在采集笔记...", 10)
+        _update("Collecting note...", 10)
         time.sleep(random.uniform(0.5, 1.5))
         from apis.xhs_pc_apis import XHS_Apis
         xhs = XHS_Apis()
         success, msg, note_info = xhs.get_note_info(note_url, cookies)
         if not success:
             with TASK_LOCK:
-                ASYNC_TASKS[task_id].update(status="failed", error=f"采集失败: {msg}")
+                ASYNC_TASKS[task_id].update(status="failed", error=f"Collection failed: {msg}")
             return
 
         items = note_info.get("data", {}).get("items", [])
@@ -319,7 +382,7 @@ def _run_quick_work_task(task_id: str, req_data: dict):
             note_card = note_info.get("data", {}).get("note_card", None)
             if not note_card:
                 with TASK_LOCK:
-                    ASYNC_TASKS[task_id].update(status="failed", error="笔记数据为空")
+                    ASYNC_TASKS[task_id].update(status="failed", error="Note data is empty")
                 return
             note = note_info["data"]
 
@@ -349,26 +412,26 @@ def _run_quick_work_task(task_id: str, req_data: dict):
             "collects": note_card.get("interact_info", {}).get("collected_count", 0),
             "comments": note_card.get("interact_info", {}).get("comment_count", 0),
         }
-        _update("采集完成，正在下载图片...", 30)
+        _update("Collection complete, downloading images...", 30)
     except Exception as e:
-        logger.exception(f"采集异常: {e}")
+        logger.exception(f"Collection error: {e}")
         with TASK_LOCK:
-            ASYNC_TASKS[task_id].update(status="failed", error=f"采集异常: {str(e)[:100]}")
+            ASYNC_TASKS[task_id].update(status="failed", error=f"Collection error: {str(e)[:100]}")
         return
 
-    # ── Step 2: 下载原图 ──────────────────────────────────────────────────
+    # Step 2: Download original images
     images = []
     for img_url in raw_images:
         try:
-            local_path = _download_image(img_url)
+            local_path = _download_image(img_url, cookies)
             images.append(local_path)
         except Exception as e:
-            logger.warning(f"图片下载失败: {img_url[:60]} -> {e}")
+            logger.warning(f"Image download failed: {img_url[:60]} -> {e}")
             images.append(img_url)
     result["images_original"] = images
-    _update("图片下载完成，正在AI改写...", 40)
+    _update("Images downloaded, AI rewriting...", 40)
 
-    # ── Step 3: AI 改写 ──────────────────────────────────────────────────
+    # Step 3: AI rewrite
     llm = settings.get_llm_config()
     if llm.get("api_key"):
         try:
@@ -377,27 +440,28 @@ def _run_quick_work_task(task_id: str, req_data: dict):
             backend = create_backend(llm["provider"], llm["api_key"],
                                      model=model_override, base_url=llm["base_url"])
             if not backend:
-                result["rewritten"] = {"title": "(AI 后端创建失败)", "desc": ""}
+                result["rewritten"] = {"title": "(AI backend creation failed)", "desc": ""}
             elif req_data.get("debate", True):
-                _update("AI Agent辩论中...", 55)
-                debate_result = rewrite_with_debate(title, desc, backend,
-                                                    style=req_data.get("style", "保持原风格"),
-                                                    ratio=req_data.get("ratio", 50))
+                _update("AI Agent debating...", 55)
+                debate_result = asyncio.run(rewrite_with_debate(title, desc, backend,
+                                                    style=req_data.get("style", "maintain original style"),
+                                                    ratio=req_data.get("ratio", 50)))
                 result["debate"] = debate_result
                 result["rewritten"] = debate_result.get("winner", {})
             else:
-                _update("AI改写中...", 55)
-                result["rewritten"] = rewrite_note(title, desc, backend,
-                                                   style=req_data.get("style", "保持原风格"),
-                                                   ratio=req_data.get("ratio", 50))
+                _update("AI rewriting...", 55)
+                result["rewritten"] = asyncio.run(rewrite_note(title, desc, backend,
+                                                   style=req_data.get("style", "maintain original style"),
+                                                   ratio=req_data.get("ratio", 50)))
         except Exception as e:
-            logger.exception(f"AI 改写异常: {e}")
-            result["rewritten"] = {"title": f"(改写失败: {str(e)[:50]})", "desc": ""}
-    _update("AI改写完成，正在图片降重...", 70)
+            logger.exception(f"AI rewrite error: {e}")
+            result["rewritten"] = {"title": f"(Rewrite failed: {str(e)[:50]})", "desc": ""}
+    _update("AI rewrite complete, image dedup...", 70)
 
-    # ── Step 4: 图片降重 ──────────────────────────────────────────────────
+    # Step 4: Image dedup
     processed_images = []
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+    project_root2 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    data_dir = os.path.join(project_root2, "backend", "data")
     processed_dir = os.path.join(data_dir, "processed")
     os.makedirs(processed_dir, exist_ok=True)
 
@@ -405,25 +469,40 @@ def _run_quick_work_task(task_id: str, req_data: dict):
     total_images = len(images)
     for i, img_path in enumerate(images):
         try:
-            _update(f"图片降重 ({i+1}/{total_images})...", 70 + int(25 * (i / max(total_images, 1))))
-            if img_path.startswith("/data/"):
-                fs_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), img_path.lstrip("/"))
-                with open(fs_path, "rb") as f:
-                    img_bytes = f.read()
-            elif img_path.startswith("/"):
-                fs_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), img_path.lstrip("/"))
-                with open(fs_path, "rb") as f:
-                    img_bytes = f.read()
+            _update(f"Image dedup ({i+1}/{total_images})...", 70 + int(25 * (i / max(total_images, 1))))
+            if img_path.startswith("/data/") or img_path.startswith("/"):
+                fs_path = os.path.join(project_root2, "backend", img_path.lstrip("/"))
+                if os.path.exists(fs_path):
+                    with open(fs_path, "rb") as f:
+                        img_bytes = f.read()
+                else:
+                    img_bytes = None
             else:
                 img_bytes = None
-                import requests as req
+
+            if not img_bytes or len(img_bytes) < 100:
+                from curl_cffi import requests as req
+                cookie_dict2 = {}
+                for pair in cookies.split(";"):
+                    pair = pair.strip()
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cookie_dict2[k.strip()] = v.strip()
                 for headers in [
-                    {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                     "Referer": "https://www.xiaohongshu.com/"},
-                    {},
+                    {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+                        "Referer": "https://www.xiaohongshu.com/",
+                        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    },
+                    {
+                        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+                        "Referer": "https://www.xiaohongshu.com/",
+                        "Accept": "image/*,*/*",
+                    },
                 ]:
                     try:
-                        resp = req.request("GET", img_path, headers=headers, timeout=20)
+                        resp = req.request("GET", img_path, headers=headers, cookies=cookie_dict2,
+                                         impersonate="chrome120", timeout=20)
                         if resp.status_code == 200 and len(resp.content) > 1000:
                             img_bytes = resp.content
                             break
@@ -431,7 +510,7 @@ def _run_quick_work_task(task_id: str, req_data: dict):
                         continue
 
             if not img_bytes or len(img_bytes) < 100:
-                processed_images.append({"original": img_path, "processed": None, "error": "图片数据无效"})
+                processed_images.append({"original": img_path, "processed": None, "error": "Invalid image data"})
                 continue
 
             processed_bytes = _process_image_bytes(img_bytes, image_level)
@@ -444,19 +523,18 @@ def _run_quick_work_task(task_id: str, req_data: dict):
                 "processed": f"/data/processed/{filename}",
             })
         except Exception as e:
-            logger.warning(f"图片降重失败: {img_path[:60]} -> {e}")
+            logger.warning(f"Image dedup failed: {img_path[:60]} -> {e}")
             processed_images.append({"original": img_path, "processed": None, "error": str(e)[:80]})
 
     result["images_processed"] = processed_images
 
-    # ── 统计更新 ──────────────────────────────────────────────────────────
+    # Stats update
     try:
-        from core.database import async_session
+        from core.database import async_session as _async_session
         from models.task_log import TaskLog
-        # Use a new event loop for the async DB call in the thread
         loop = asyncio.new_event_loop()
         async def _save_log():
-            async with async_session() as db:
+            async with _async_session() as db:
                 log = TaskLog(
                     task_type="quick_work",
                     status="success",
@@ -473,12 +551,12 @@ def _run_quick_work_task(task_id: str, req_data: dict):
     except Exception:
         pass
 
-    msg = f"完成！采集: {title[:20]}... | {len(images)}张图 | {'已改写' if result['rewritten'] else '未改写'}"
+    msg = f"Complete! Collection: {title[:20]}... | {len(images)} images | {'Rewritten' if result['rewritten'] else 'Not rewritten'}"
     with TASK_LOCK:
         ASYNC_TASKS[task_id].update(
             status="completed",
             progress=100,
-            step="完成",
+            step="Complete",
             result=result,
             message=msg,
         )
@@ -486,10 +564,18 @@ def _run_quick_work_task(task_id: str, req_data: dict):
 
 @router.post("/run-async")
 async def quick_work_run_async(req: QuickWorkRequest, user=Depends(get_current_user)):
-    """启动异步任务：采集笔记 → AI改写 → 图片降重，返回 task_id 供轮询"""
-    cookies = settings.COOKIES
+    """Start async task: collect note -> AI rewrite -> image dedup, returns task_id for polling"""
+    user_id = int(user["sub"])
+    user_cookie = ""
+    async with async_session() as db:
+        from models.user import User
+        result = await db.execute(select(User).where(User.id == user_id))
+        u = result.scalar_one_or_none()
+        if u:
+            user_cookie = u.cookie or ""
+    cookies = user_cookie or settings.COOKIES
     if not cookies:
-        return {"success": False, "message": "Cookie 未配置，请先在设置中添加小红书 Cookie"}
+        return {"success": False, "message": "Cookie not configured"}
 
     task_id = f"qw_{uuid.uuid4().hex[:12]}"
     with TASK_LOCK:
@@ -497,34 +583,34 @@ async def quick_work_run_async(req: QuickWorkRequest, user=Depends(get_current_u
             "task_id": task_id,
             "status": "running",
             "progress": 0,
-            "step": "任务已创建...",
+            "step": "Task created...",
             "result": None,
             "error": None,
             "message": None,
             "created_at": time.time(),
         }
 
-    # 启动后台线程
     req_data = req.dict()
+    req_data["_cookies"] = cookies
     thread = threading.Thread(target=_run_quick_work_task, args=(task_id, req_data), daemon=True)
     thread.start()
 
-    return {"success": True, "task_id": task_id, "message": "任务已提交，可在工作台查看进度"}
+    return {"success": True, "task_id": task_id, "message": "Task submitted"}
 
 
 @router.get("/task/{task_id}")
 async def get_task_status(task_id: str, user=Depends(get_current_user)):
-    """轮询异步任务状态"""
+    """Poll async task status"""
     with TASK_LOCK:
         task = ASYNC_TASKS.get(task_id)
     if not task:
-        return {"success": False, "message": "任务不存在"}
+        return {"success": False, "message": "Task not found"}
     return {"success": True, "data": task}
 
 
 @router.get("/tasks")
 async def list_recent_tasks(user=Depends(get_current_user)):
-    """列出最近的异步任务"""
+    """List recent async tasks"""
     with TASK_LOCK:
         tasks = sorted(ASYNC_TASKS.values(), key=lambda t: t["created_at"], reverse=True)[:20]
     return {"success": True, "data": tasks}

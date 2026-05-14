@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Card, Typography, Space, Button, Input, Tabs, Tag, Progress, List, Statistic, Row, Col, message, Tooltip, Empty } from 'antd'
+import { App,  Card, Typography, Space, Button, Input, Tabs, Tag, Progress, List, Statistic, Row, Col, Tooltip, Empty } from 'antd'
 import { SafetyCertificateOutlined, RobotOutlined, CheckCircleOutlined, WarningOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import client from '../../api/client'
 

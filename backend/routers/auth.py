@@ -25,6 +25,7 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
+    success: bool = True
     access_token: str
     token_type: str = "bearer"
     username: str
@@ -36,8 +37,8 @@ async def register(req: RegisterRequest):
     """Register with license key."""
     if not req.username or len(req.username) < 2:
         raise HTTPException(status_code=400, detail="用户名至少2个字符")
-    if not req.password or len(req.password) < 4:
-        raise HTTPException(status_code=400, detail="密码至少4个字符")
+    if not req.password or len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少6个字符")
 
     async with async_session() as db:
         # Check username exists
@@ -77,7 +78,7 @@ async def register(req: RegisterRequest):
 
         # Generate token
         token = create_access_token({"sub": str(user.id), "username": user.username})
-        return TokenResponse(access_token=token, username=user.username, role=user.role)
+        return {"success": True, "access_token": token, "token_type": "bearer", "username": user.username, "role": user.role}
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -96,7 +97,7 @@ async def login(req: LoginRequest):
             raise HTTPException(status_code=403, detail="账号已过期，请联系管理员续期")
 
         token = create_access_token({"sub": str(user.id), "username": user.username})
-        return TokenResponse(access_token=token, username=user.username, role=user.role)
+        return {"success": True, "access_token": token, "token_type": "bearer", "username": user.username, "role": user.role}
 
 
 @router.get("/me")
@@ -131,3 +132,26 @@ async def get_announcement():
                 "created_at": ann.created_at.isoformat() if ann.created_at else None,
             }
         }
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@router.post("/admin-login")
+async def admin_login(req: AdminLoginRequest):
+    """Admin login - only allows admin role users."""
+    async with async_session() as db:
+        result = await db.execute(select(User).where(User.username == req.username))
+        user = result.scalar_one_or_none()
+
+        if not user or not verify_password(req.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        if user.role != "admin":
+            raise HTTPException(status_code=403, detail="权限不足，需要管理员权限")
+        if user.status == "disabled":
+            raise HTTPException(status_code=403, detail="账号已被禁用")
+
+        token = create_access_token({"sub": str(user.id), "username": user.username, "role": user.role})
+        return {"success": True, "data": {"token": token, "user": {"username": user.username, "role": user.role}}}

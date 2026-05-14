@@ -4,7 +4,7 @@
 """
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
@@ -234,7 +234,11 @@ async def _execute_pipeline(auto_id: int):
             return
 
         keywords = [kw.strip() for kw in auto.keywords.split(",") if kw.strip()]
-        pipeline = json.loads(auto.pipeline_config) if auto.pipeline_config else {}
+        try:
+            pipeline = json.loads(auto.pipeline_config) if auto.pipeline_config else {}
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in automation config: {e}")
+            pipeline = {}
         max_retries = pipeline.get("max_retries", 1)
 
         total_success = 0
@@ -280,7 +284,7 @@ async def _execute_pipeline(auto_id: int):
                             from utils.rewrite import create_backend_from_env, rewrite_note
                             llm_backend = create_backend_from_env()
                             if llm_backend:
-                                rw_result = rewrite_note(llm_backend, title, desc)
+                                rw_result = await rewrite_note(title, desc, llm_backend)
                                 rewritten_title = rw_result.get("title", title)
                                 rewritten_desc = rw_result.get("desc", desc)
                                 rw_ms = int((time.time() - t1) * 1000)
@@ -328,7 +332,7 @@ async def _execute_pipeline(auto_id: int):
             await db.commit()
 
         # Update automation stats
-        auto.last_run = datetime.utcnow()
+        auto.last_run = datetime.now(timezone.utc)
         auto.run_count += 1
         auto.success_count += total_success
         auto.fail_count += total_fail

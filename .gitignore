@@ -1,5 +1,6 @@
 __pycache__
 node_modules/
+*.tsbuildinfo
 *.so
 .Python
 build/
@@ -55,3 +56,21 @@ deep_*.py
 verify_*.py
 download_*.py
 debug_images/
+compare_main.py
+transfer_*.py
+write_main_to_nas.py
+full_api_test.py
+full_test.py
+get_logs*.py
+fix_container*.py
+recreate_container.py
+retry_verify.py
+final_deploy.py
+deploy_autocommit.py
+
+# Temp archives
+*.tar
+user前.tar
+
+# Backend temp scripts
+backend/update_admin_password.py

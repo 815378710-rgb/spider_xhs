@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
-  Card, Input, Button, Typography, Tabs, message, Space, Tag, Descriptions,
+  App, Card, Input, Button, Typography, Tabs, Space, Tag, Descriptions,
   Row, Col, Statistic, Alert, Segmented, Spin, Image, InputRef
 } from 'antd'
 import {
   LockOutlined, SaveOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  InfoCircleOutlined, UserOutlined, QrcodeOutlined, BrowserOutlined,
+  InfoCircleOutlined, UserOutlined, QrcodeOutlined, DesktopOutlined,
   LoadingOutlined, CheckCircleFilled, ExclamationCircleFilled, GlobalOutlined
 } from '@ant-design/icons'
 import client from '../../api/client'
@@ -32,6 +32,7 @@ interface LoginSession {
 }
 
 export default function UserCenterPage() {
+  const { message } = App.useApp()
   const { username, role } = useAuthStore()
 
   // Cookie管理状态
@@ -411,7 +412,7 @@ export default function UserCenterPage() {
             <Button
               type="primary"
               size="large"
-              icon={<BrowserOutlined />}
+              icon={<DesktopOutlined />}
               loading={loginLoading}
               onClick={startBrowserLogin}
             >

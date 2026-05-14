@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Typography, Modal, Form, Input, message, Popconfirm, Row, Col } from 'antd'
+import { App,  Card, Table, Button, Space, Typography, Modal, Form, Input, Popconfirm, Row, Col } from 'antd'
 import { PlusOutlined, DeleteOutlined, SendOutlined, RobotOutlined } from '@ant-design/icons'
 import client from '../../api/client'
 

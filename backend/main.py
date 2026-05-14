@@ -6,7 +6,7 @@ import sys
 
 # Ensure backend package is on path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# Also add parent Spider_XHS dir so routers can import apis/, xhs_utils/, utils/
+# Also add parent Spider_XHS dir  so routers can import apis/, xhs_utils/, utils/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from contextlib import asynccontextmanager
@@ -96,7 +96,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Register routers ──────────────────────────────────────────────────────────
+# ── Register routers ─────────────────────────────────────────────────
 from routers import (
     auth, config, login, accounts, cookies,
     collect, search, content, drafts, rewrite, images,
@@ -141,13 +141,13 @@ for router, prefix, tag in router_prefix_map:
     app.include_router(router, prefix=prefix, tags=[tag])
 
 
-# ── Health check ──────────────────────────────────────────────────────────────
+# ── Health check ──────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "2.2.0"}
 
 
-# ── Serve data files (images, processed) ─────────────────────────────────────
+# ── Serve data files (images, processed) ────────────────────────
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 IMAGES_DIR = os.path.join(DATA_DIR, "images")
 PROCESSED_DIR = os.path.join(DATA_DIR, "processed")
@@ -158,21 +158,48 @@ app.mount("/data/images", StaticFiles(directory=IMAGES_DIR), name="data-images")
 app.mount("/data/processed", StaticFiles(directory=PROCESSED_DIR), name="data-processed")
 
 
-# ── Serve frontend (built React app) ─────────────────────────────────────────
+# ── Serve frontend (built React apps) ─────────────────────────
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+ADMIN_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend-admin", "dist")
+
+# Mount user frontend assets
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        """Serve React SPA for all non-API routes."""
+# Mount admin frontend assets
+if os.path.isdir(ADMIN_DIST):
+    app.mount("/admin/assets", StaticFiles(directory=os.path.join(ADMIN_DIST, "assets")), name="admin-assets")
+
+# Serve admin frontend for /admin/* routes
+if os.path.isdir(ADMIN_DIST):
+    @app.get("/admin/{full_path:path}")
+    async def serve_admin_spa(full_path: str):
+        """Serve Admin frontend for /admin/* routes."""
         from pathlib import Path
         
+        static_dir = Path(ADMIN_DIST).resolve()
+        requested_path = (static_dir / full_path).resolve()
+        
         # 防止路径遍历攻击
+        if not str(requested_path).startswith(str(static_dir)):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Forbidden")
+        
+        if requested_path.is_file():
+            return FileResponse(requested_path)
+        return FileResponse(os.path.join(ADMIN_DIST, "index.html"))
+
+# Serve user frontend for all other non-API routes
+if os.path.isdir(FRONTEND_DIST):
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve User frontend for all other non-API routes."""
+        from pathlib import Path
+        
         static_dir = Path(FRONTEND_DIST).resolve()
         requested_path = (static_dir / full_path).resolve()
         
-        # 确保请求的路径在FRONTEND_DIST目录内
+        # 防止路径遍历攻击
         if not str(requested_path).startswith(str(static_dir)):
             from fastapi import HTTPException
             raise HTTPException(status_code=403, detail="Forbidden")
@@ -182,7 +209,8 @@ if os.path.isdir(FRONTEND_DIST):
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Entry point ─────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=5005, reload=True)
+    # 禁用reload，避免文件变化导致重启失败
+    uvicorn.run("main:app", host="0.0.0.0", port=5005, reload=False)

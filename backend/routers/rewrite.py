@@ -41,7 +41,7 @@ async def rewrite_note(req: RewriteRequest, user=Depends(get_current_user)):
                                 model=llm["model"], base_url=llm["base_url"])
         if not backend:
             return {"success": False, "message": "AI 后端未配置"}
-        result = rewrite_note(req.title, req.desc, backend,
+        result = await rewrite_note(req.title, req.desc, backend,
                               style=req.style, ratio=req.rewrite_ratio,
                               industry=req.industry)
         return {"success": True, "data": result}
@@ -60,7 +60,7 @@ async def rewrite_smart(req: SmartRewriteRequest, user=Depends(get_current_user)
                                 model=llm["model"], base_url=llm["base_url"])
         if not backend:
             return {"success": False, "message": "AI 后端未配置"}
-        result = rewrite_with_debate(req.title, req.desc, backend)
+        result = await rewrite_with_debate(req.title, req.desc, backend)
         return {"success": True, "data": result}
     except Exception as e:
         logger.exception(f"智能改写异常: {e}")
@@ -81,7 +81,7 @@ async def batch_rewrite(req: BatchRewriteRequest, user=Depends(get_current_user)
         results = []
         for note in req.notes[:20]:  # max 20
             try:
-                result = rewrite_note(note.get("title", ""), note.get("desc", ""), backend,
+                result = await rewrite_note(note.get("title", ""), note.get("desc", ""), backend,
                                       style=req.style, ratio=req.rewrite_ratio)
                 results.append({"success": True, "data": result, "original": note})
             except Exception as e:
@@ -107,7 +107,7 @@ async def optimize_title(req: OptimizeTitleRequest, user=Depends(get_current_use
                                 model=llm["model"], base_url=llm["base_url"])
         if not backend:
             return {"success": False, "message": "AI 后端未配置"}
-        result = _optimize(req.title, backend, industry=req.industry)
+        result = await _optimize(req.title, backend, industry=req.industry)
         return {"success": True, "data": result}
     except Exception as e:
         logger.exception(f"标题优化异常: {e}")

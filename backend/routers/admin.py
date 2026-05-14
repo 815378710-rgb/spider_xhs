@@ -48,9 +48,11 @@ async def list_users(
                         "username": u.username,
                         "role": u.role,
                         "status": u.status,
+                        "is_active": u.status == "active",
                         "has_cookie": bool(u.cookie),
                         "expires_at": u.expires_at.isoformat() if u.expires_at else None,
                         "created_at": u.created_at.isoformat() if u.created_at else None,
+                        "last_login": u.updated_at.isoformat() if u.updated_at else None,
                     }
                     for u in users
                 ],
@@ -86,8 +88,8 @@ async def update_user(
             user.role = body["role"]
         if body.get("password"):
             # P1-8 修复：添加密码长度验证
-            if len(body["password"]) < 8:
-                raise HTTPException(status_code=400, detail="密码长度至少8个字符")
+            if len(body["password"]) < 6:
+                raise HTTPException(status_code=400, detail="密码长度至少6个字符")
             user.password_hash = hash_password(body["password"])
 
         await db.commit()
@@ -148,7 +150,7 @@ async def generate_keys(
 ):
     """Generate license keys (支持自定义有效天数)."""
     count = min(max(body.get("count", 1), 1), 100)
-    valid_days = max(body.get("valid_days", 30), 0)  # 0 = 永久
+    valid_days = max(body.get("expires_days", body.get("valid_days", 30)), 0)  # 0 = 永久
     keys = []
     async with async_session() as db:
         for _ in range(count):
@@ -175,7 +177,12 @@ async def list_keys(
 ):
     """List license keys with pagination."""
     async with async_session() as db:
-        query = select(LicenseKey)
+        # JOIN with User table to get usernames
+        from sqlalchemy.orm import aliased
+        UsedByUser = aliased(User)
+        query = select(LicenseKey, UsedByUser.username).outerjoin(
+            UsedByUser, LicenseKey.used_by == UsedByUser.id
+        )
         if search:
             query = query.where(LicenseKey.key.contains(search.upper()))
         if status:
@@ -187,7 +194,7 @@ async def list_keys(
 
         query = query.offset((page - 1) * page_size).limit(page_size)
         result = await db.execute(query)
-        keys = result.scalars().all()
+        rows = result.all()
 
         return {
             "success": True,
@@ -195,15 +202,17 @@ async def list_keys(
                 "items": [
                     {
                         "id": k.id,
-                        "key": k.key,
+                        "code": k.key,
                         "valid_days": k.valid_days,
                         "status": k.status,
+                        "is_used": k.status == "used",
                         "used_by": k.used_by,
+                        "used_by_username": username or "",
                         "used_at": k.used_at.isoformat() if k.used_at else None,
                         "expires_at": k.expires_at.isoformat() if k.expires_at else None,
                         "created_at": k.created_at.isoformat() if k.created_at else None,
                     }
-                    for k in keys
+                    for k, username in rows
                 ],
                 "total": total,
                 "page": page,
@@ -376,3 +385,53 @@ async def test_model_config(user=Depends(require_admin)):
         return {"success": True, "message": f"连接成功: {response[:50]}"}
     except Exception as e:
         return {"success": False, "message": f"连接失败: {str(e)[:100]}"}
+
+
+# ── Stats ──────────────────────────────────────────────────────
+@router.get("/stats")
+async def get_stats(user=Depends(require_admin)):
+    """Get system statistics overview."""
+    async with async_session() as db:
+        # Total users
+        total_users = (await db.execute(select(func.count()).select_from(User))).scalar() or 0
+        
+        # Active cards
+        active_cards = (await db.execute(
+            select(func.count()).select_from(LicenseKey).where(LicenseKey.status == "unused")
+        )).scalar() or 0
+        
+        return {
+            "success": True,
+            "data": {
+                "totalUsers": total_users,
+                "activeCards": active_cards,
+                "todayApiCalls": 0,  # Placeholder
+                "todayTokenUsage": 0,  # Placeholder
+            }
+        }
+
+
+@router.get("/stats/usage")
+async def get_usage_stats(
+    group_by: str = "user",
+    start_date: str = None,
+    end_date: str = None,
+    user=Depends(require_admin),
+):
+    """Get usage statistics."""
+    async with async_session() as db:
+        query = select(User)
+        result = await db.execute(query)
+        users = result.scalars().all()
+        
+        stats = []
+        for u in users:
+            stats.append({
+                "username": u.username,
+                "role": u.role,
+                "api_calls": 0,  # Placeholder
+                "token_usage": 0,  # Placeholder
+                "last_active": u.last_login.isoformat() if u.last_login else None,
+            })
+        
+        return {"success": True, "data": stats}

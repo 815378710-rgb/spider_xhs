@@ -11,35 +11,39 @@ from cryptography.fernet import Fernet
 from core.config import settings
 
 # P1-4 修复：使用bcrypt代替SHA-256，提供更强的密码哈希保护
+# 注意：bcrypt >= 5.0 与 passlib 不兼容（detect_wrap_bug 内部使用超长字符串触发 ValueError）
+# 因此直接使用 bcrypt 模块，跳过 passlib 的 CryptContext
+import bcrypt as _bcrypt
+
 try:
     from passlib.context import CryptContext
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 except ImportError:
-    # Fallback: 如果passlib未安装，使用bcrypt直接实现
-    import bcrypt
-    pwd_context = None
+    _pwd_context = None
 
 
 def hash_password(password: str) -> str:
     """Hash a plain-text password with bcrypt."""
-    if pwd_context:
-        return pwd_context.hash(password)
-    else:
-        # Fallback implementation
-        salt = bcrypt.gensalt()
-        return bcrypt.hashpw(password.encode(), salt).decode()
+    try:
+        salt = _bcrypt.gensalt()
+        return _bcrypt.hashpw(password.encode(), salt).decode()
+    except Exception:
+        if _pwd_context:
+            return _pwd_context.hash(password)
+        raise
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain-text password against a hash."""
-    if pwd_context:
-        return pwd_context.verify(plain_password, hashed_password)
-    else:
-        # Fallback implementation
-        try:
-            return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
-        except Exception:
-            return False
+    try:
+        return _bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
+    except Exception:
+        if _pwd_context:
+            try:
+                return _pwd_context.verify(plain_password, hashed_password)
+            except Exception:
+                return False
+        return False
 
 
 # ── License key generation ───────────────────────────────────────────────────
